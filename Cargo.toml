@@ -1,0 +1,26 @@
+[package]
+name = "rename-me"
+version = "0.0.0"
+authors = [
+	"Mavity The Madity",
+]
+edition = "2024"
+rust-version = "1.98.0"
+description = "Foo bar baz"
+homepage = "https://github.com/EpicVon2468/rename-me/"
+repository = "https://github.com/EpicVon2468/rename-me/"
+license = "MIT OR Apache-2.0"
+exclude = [
+	".github/",
+]
+
+[package.metadata.dist]
+dist = true
+# https://github.com/axodotdev/cargo-dist/issues/745
+#features = [
+#]
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
