@@ -20,6 +20,19 @@ dist = true
 #features = [
 #]
 
+[dependencies.inkwell]
+version = ">=0.9.0, <1"
+features = [
+	"llvm22-1",
+	"llvm22-1-force-dynamic",
+	"nightly",
+	"target-x86",
+	"target-arm",
+	"target-aarch64",
+	"target-riscv",
+]
+default-features = false
+
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"

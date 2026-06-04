@@ -55,4 +55,9 @@
 )]
 #![allow(clippy::borrowed_box)]
 #![doc = include_str!("../README.md")]
-pub fn foo() {}
+
+use inkwell::context::Context;
+
+pub fn main() {
+	let _context: Context = Context::create();
+}

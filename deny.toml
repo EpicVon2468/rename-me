@@ -72,7 +72,14 @@ allow = [
 confidence-threshold = 1.0
 # Allow 1 or more licences on a per-crate basis, so that particular licences
 # aren't accepted for every possible crate as with the normal allow list
-exceptions = []
+exceptions = [
+	{
+		allow = [
+			"Unicode-3.0"
+		],
+		crate = "unicode-ident"
+	},
+]
 
 # More documentation about the 'bans' section can be found here:
 # https://embarkstudios.github.io/cargo-deny/checks/bans/cfg.html
