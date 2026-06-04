@@ -55,9 +55,14 @@
 )]
 #![allow(clippy::borrowed_box)]
 #![doc = include_str!("../README.md")]
+pub mod codegen;
 
-use inkwell::context::Context;
+use anyhow::Result;
 
-pub fn main() {
-	let _context: Context = Context::create();
+use crate::codegen::CodeGen;
+
+pub fn main() -> Result<()> {
+	let codegen = CodeGen::new("test");
+	dbg!(codegen);
+	Ok(())
 }

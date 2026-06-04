@@ -20,6 +20,9 @@ dist = true
 #features = [
 #]
 
+[dependencies.anyhow]
+version = ">=1.0.102, <2"
+
 [dependencies.inkwell]
 version = ">=0.9.0, <1"
 features = [
@@ -32,6 +35,11 @@ features = [
 	"target-riscv",
 ]
 default-features = false
+
+[patch.crates-io]
+inkwell = {
+	git = "https://github.com/TheDan64/inkwell",
+}
 
 # The profile that 'dist' will build with
 [profile.dist]
