@@ -66,9 +66,9 @@ use crate::codegen::CodeGen;
 use crate::lexer::Lexer;
 
 pub fn main() -> Result<()> {
-	let mut input = "ﬀ".as_bytes();
+	let mut input: &[u8] = "ﬀ".as_bytes();
 	let mut lexer: Lexer = Lexer::new(&mut input);
-	let _ = dbg!(lexer.read_char());
+	let _ = dbg!(lexer.read_char())?;
 	enable_llvm_pretty_stack_trace();
 	let codegen: CodeGen = CodeGen::new("test");
 	codegen.debug();

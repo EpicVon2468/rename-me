@@ -6,7 +6,7 @@ use inkwell::module::Module;
 
 #[derive(Debug)]
 pub struct CodeGen<'a> {
-	// SANITY: ManuallyDrop is 0-cost.  Even if this looks verbose, it isn't.
+	// SANITY(overhead + unusual + verbosity): ManuallyDrop is 0-cost.
 	// SAFETY:
 	// Problem(s):
 	// - Using `ManuallyDrop` values after they have been dropped is Undefined Behaviour.
@@ -22,9 +22,9 @@ impl CodeGen<'_> {
 	pub fn new(name: &str) -> Self {
 		let context: ManuallyDrop<Context> = ManuallyDrop::new(Context::create());
 		let ptr: *const ManuallyDrop<Context> = &raw const context;
-		// SANITY + SAFETY: `context` lives for as long as `Self`.
+		// SANITY(ptr) + SAFETY: `context` lives for as long as `Self`.
 		let module: Module = unsafe { (*ptr).create_module(name) };
-		// SANITY + SAFETY: `context` lives for as long as `Self`.
+		// SANITY(ptr) + SAFETY: `context` lives for as long as `Self`.
 		let builder: Builder = unsafe { (*ptr).create_builder() };
 		Self {
 			context,
