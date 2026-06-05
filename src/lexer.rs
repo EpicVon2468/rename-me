@@ -1,70 +1,102 @@
 use std::hint::{cold_path, unreachable_unchecked};
-use std::io::Read;
+use std::io::BufRead;
 
 use anyhow::{Context as _, Result, bail};
 
+/// `LETTER : [a-zA-Z]`
+///
+/// `NUM : [0-9]`
 #[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Token {
-	/// `_*[a-zA-Z]+(_|[a-zA-Z])*`
+	/// `IDENTIFIER : '_'* LETTER+ ( '_' | LETTER )* ;`
 	Identifier(String),
 	/// Integer value.
 	///
-	/// `(\+)?[0-9]+((_[0-9]+)+)?`
+	/// `LITERAL : MINUS? NUM+ ( '_' NUM+ )* ;`
 	Literal(String),
 	/// Floating-point value.
 	///
-	/// `((\+)?[0-9]+((_[0-9]+)+)?)((\.((\+)?[0-9]+((_[0-9]+)+)?)f)|f)`
+	/// `REAL : MINUS? NUM+ ( '_' NUM+ )* ( '.' NUM+ ( '_' NUM+ )* )? 'f' ;`
 	Real(String),
-	/// `funct`
+	/// `FUNCTION : 'f' 'u' 'n' 'c' 't' ;`
 	Function,
-	/// `unsafe`
+	/// `UNSAFE : 'u' 'n' 's' 'a' 'f' 'e' ;`
 	Unsafe,
-	/// `extern`
+	/// `EXTERNAL : 'e' 'x' 't' 'e' 'r' 'n' ;`
 	External,
-	/// `return`
+	/// `RETURN : 'r' 'e' 't' 'u' 'r' 'n' ;`
 	Return,
-	/// `{`
+	/// `OPEN_BRACE : '{' ;`
 	OpenBrace,
-	/// `}`
+	/// `CLOSE_BRACE : '}' ;`
 	CloseBrace,
-	/// `(`
+	/// `OPEN_BRACKET : '(' ;`
 	OpenBracket,
-	/// `)`
+	/// `CLOSE_BRACKET : ')' ;`
 	CloseBracket,
-	/// `[`
-	OpenSqrBracket,
-	/// `]`
-	CloseSqrBracket,
-	/// `;`
+	/// `OPEN_SQUARE_BRACKET : '[' ;`
+	OpenSquareBracket,
+	/// `CLOSE_SQUARE_BRACKET : ']' ;`
+	CloseSquareBracket,
+	/// `SEMICOLON : ';' ;`
 	Semicolon,
-	/// `:`
+	/// `COLON : ':' ;`
 	Colon,
-	/// `/`
-	Div,
+	/// Div.
+	///
+	/// `SLASH : '/' ;`
+	Slash,
 	/// Mul or ptr.
 	///
-	/// `*`
+	/// `ASTERISK : '*' ;`
 	Asterisk,
-	/// `+`
-	Add,
-	/// Sub or unary minus.
+	/// `PLUS : '+' ;`
+	Plus,
+	/// (Unary) minus.
 	///
-	/// `-`
+	/// `MINUS : '-' ;`
 	Minus,
 }
 
+pub type Src<'a> = &'a mut dyn BufRead;
+
 pub struct Lexer<'a> {
-	src: &'a mut dyn Read,
+	// TODO: use `BufRead::fill_buf()` to 'peek'.
+	src: Src<'a>,
 }
 
 impl<'a> Lexer<'a> {
-	pub fn new(src: &'a mut dyn Read) -> Self {
+	pub fn new(src: Src<'a>) -> Self {
 		Self { src }
 	}
 
-	pub const fn read_token(&mut self) -> Option<Token> {
-		None
+	pub fn read_token(&mut self) -> Result<Token> {
+		let first: char = self.read_until_substantial_char()?;
+		match first {
+			'{' => Token::OpenBrace,
+			'}' => Token::CloseBrace,
+			'(' => Token::OpenBracket,
+			')' => Token::CloseBracket,
+			'[' => Token::OpenSquareBracket,
+			']' => Token::CloseSquareBracket,
+			';' => Token::Semicolon,
+			':' => Token::Colon,
+			'/' => Token::Slash,
+			'*' => Token::Asterisk,
+			'+' => Token::Plus,
+			'-' => Token::Minus,
+			_ => todo!(),
+		};
+		todo!()
+	}
+
+	pub fn read_until_substantial_char(&mut self) -> Result<char> {
+		let mut current: char = self.read_char()?;
+		while current.is_whitespace() {
+			current = self.read_char()?;
+		}
+		Ok(current)
 	}
 
 	fn read(&mut self, buf: &mut [u8]) -> Result<()> {
@@ -140,7 +172,6 @@ impl<'a> Lexer<'a> {
 // Copied from `core`'s str internals, w/o the first 128 entries.
 // Cheaper to store 128 `u8`s and convert at use-site than to store 128 `usize`s.
 // The first 128 entries (which were all 1) were stripped out, as the only use of this value is non-ASCII.
-// FIXME(verbosity): Replace with range check?
 // https://tools.ietf.org/html/rfc3629
 static UTF8_CHAR_WIDTH: [u8; 128] = [
 	// 1  2  3  4  5  6  7  8  9  A  B  C  D  E  F
