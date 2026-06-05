@@ -32,4 +32,8 @@ impl CodeGen<'_> {
 			builder,
 		}
 	}
+
+	pub fn debug(&self) {
+		self.module.print_to_stderr();
+	}
 }

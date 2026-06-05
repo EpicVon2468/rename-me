@@ -56,13 +56,21 @@
 #![allow(clippy::borrowed_box)]
 #![doc = include_str!("../README.md")]
 pub mod codegen;
+pub mod lexer;
 
 use anyhow::Result;
 
+use inkwell::support::enable_llvm_pretty_stack_trace;
+
 use crate::codegen::CodeGen;
+use crate::lexer::Lexer;
 
 pub fn main() -> Result<()> {
-	let codegen = CodeGen::new("test");
-	dbg!(codegen);
+	let mut input = "ﬀ".as_bytes();
+	let mut lexer: Lexer = Lexer::new(&mut input);
+	let _ = dbg!(lexer.read_char());
+	enable_llvm_pretty_stack_trace();
+	let codegen: CodeGen = CodeGen::new("test");
+	codegen.debug();
 	Ok(())
 }
