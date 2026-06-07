@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 
 use crate::lexer::{Lexer, Src, Token};
 
@@ -37,6 +37,7 @@ pub struct FunctionDeclaration {
 }
 
 /// `stmt : variableStmt | assignmentStmt | unitStmt ;`
+#[derive(Debug)]
 pub enum Stmt {
 	// TODO: Option<Expr> for uninitialised variables?
 	/// `variableStmt : VAL assignmentStmt ;`
@@ -47,14 +48,23 @@ pub enum Stmt {
 	Unit(Expr),
 }
 
-/// `expr : termExpr ;`
-#[repr(transparent)]
-pub struct Expr(TermExpr);
-
-/// `termExpr : factorExpr ( ( PLUS | MINUS ) factorExpr )* ;`
-pub struct TermExpr {
-	pub lhs: FactorExpr,
-	pub next: Option<(Term, Box<Self>)>,
+#[derive(Debug)]
+pub enum Expr {
+	/// `addExpr : expr PLUS expr ;`
+	Add(Box<Self>, Box<Self>),
+	/// `subExpr : expr MINUS expr ;`
+	Sub(Box<Self>, Box<Self>),
+	/// `mulExpr : expr ASTERISK expr ;`
+	Mul(Box<Self>, Box<Self>),
+	/// `divExpr : expr SLASH expr ;`
+	Div(Box<Self>, Box<Self>),
+	/// `unaryExpr : ( MINUS | EXCLAMATION_MARK | ASTERISK | AMPERSAND ) expr ;`
+	Unary(Unary, Box<Self>),
+	/// `functionCallExpr : IDENTIFIER OPEN_BRACKET ( expr ( COMMA expr )* )? CLOSE_BRACKET ;`
+	FunctionCall(String, Vec<Self>),
+	/// `blockExpr : ( CONSTANT? UNSAFE? )? OPEN_BRACE stmt* expr CLOSE_BRACE ;`
+	Block(Attributes, Vec<Stmt>, Box<Self>),
+	IntegerLiteral(i32),
 }
 
 pub enum Term {
@@ -62,23 +72,12 @@ pub enum Term {
 	Sub,
 }
 
-/// `factorExpr : unaryExpr ( ( SLASH | ASTERISK ) unaryExpr )* ;`
-pub struct FactorExpr {
-	pub lhs: UnaryExpr,
-	pub next: Option<(Factor, Box<Self>)>,
-}
-
 pub enum Factor {
-	Div,
 	Mul,
+	Div,
 }
 
-/// `unaryExpr : ( MINUS | EXCLAMATION_MARK | ASTERISK | AMPERSAND )? functionExpr ;`
-pub struct UnaryExpr {
-	pub op: Option<Unary>,
-	pub expr: FunctionExpr,
-}
-
+#[derive(Debug)]
 pub enum Unary {
 	/// `-`
 	Minus,
@@ -89,28 +88,6 @@ pub enum Unary {
 	// Ptr,
 	/// `&`
 	Ref,
-}
-
-/// `functionExpr : ( IDENTIFIER OPEN_BRACKET ( primaryExpr ( COMMA primaryExpr )* )? CLOSE_BRACKET ) | primaryExpr ;`
-pub struct FunctionExpr {
-	pub identifier: Option<String>,
-	pub expr: Vec<PrimaryExpr>,
-}
-
-/// `primaryExpr : IDENTIFIER | value | ( OPEN_BRACKET expr CLOSE_BRACKET ) | blockExpr ;`
-pub enum PrimaryExpr {
-	VariableRef(String),
-	// TODO implement
-	Value,
-	Expr(Expr),
-	Block(BlockExpr),
-}
-
-/// `blockExpr : ( CONSTANT? UNSAFE? )? OPEN_BRACE stmt* expr CLOSE_BRACE ;`
-pub struct BlockExpr {
-	attributes: Attributes,
-	body: Vec<Stmt>,
-	final_value: Expr,
 }
 
 pub struct Parser<'a> {
@@ -130,83 +107,67 @@ impl<'a> Parser<'a> {
 	}
 
 	pub fn parse(&mut self) -> Result<()> {
-		let result: Result<Expr> = self.parse_expr();
-		match result {
-			Err(error) => Err(error),
-			Ok(_) => Ok(()),
+		let _ = dbg!(self.parse_term_expr()?);
+		Ok(())
+	}
+
+	pub fn parse_term_expr(&mut self) -> Result<Expr> {
+		let mut result: Expr = self.parse_factor_expr()?;
+		loop {
+			let op: Term = match *self.lexer.peek_token()? {
+				Token::Plus => Term::Add,
+				Token::Minus => Term::Sub,
+				_ => break,
+			};
+			// Eat `op`.
+			let _ = self.lexer.read_token();
+			let rhs: Expr = self.parse_factor_expr()?;
+			result = match op {
+				Term::Add => Expr::Add(result.into(), rhs.into()),
+				Term::Sub => Expr::Sub(result.into(), rhs.into()),
+			};
 		}
-	}
-
-	pub fn parse_expr(&mut self) -> Result<Expr> {
-		self.parse_term_expr().map(Expr)
-	}
-
-	pub fn parse_term_expr(&mut self) -> Result<TermExpr> {
-		let lhs: FactorExpr = self.parse_factor_expr()?;
-		let mut result: TermExpr = TermExpr { lhs, next: None };
-		self.recurse_term_expr(&mut result)?;
 		Ok(result)
 	}
 
-	fn recurse_term_expr(&mut self, result: &mut TermExpr) -> Result<()> {
-		let op: Term = match *self.lexer.peek_token()? {
-			Token::Plus => Term::Add,
-			Token::Minus => Term::Sub,
-			_ => return Ok(()),
-		};
-		// Eat `op`.
-		let _ = self.lexer.read_token();
-		let lhs: FactorExpr = self
-			.parse_factor_expr()
-			.context("Expected factorExpr to follow dangling operator in termExpr!")?;
-		let mut next: TermExpr = TermExpr { lhs, next: None };
-		self.recurse_term_expr(&mut next)?;
-		result.next = Some((op, Box::new(next)));
-		Ok(())
-	}
-
-	pub fn parse_factor_expr(&mut self) -> Result<FactorExpr> {
-		let lhs: UnaryExpr = self.parse_unary_expr()?;
-		let mut result = FactorExpr { lhs, next: None };
-		self.recurse_factor_expr(&mut result)?;
+	pub fn parse_factor_expr(&mut self) -> Result<Expr> {
+		let mut result: Expr = self.parse_unary_expr()?;
+		loop {
+			let op: Factor = match *self.lexer.peek_token()? {
+				Token::Asterisk => Factor::Mul,
+				Token::Slash => Factor::Div,
+				_ => break,
+			};
+			// Eat `op`.
+			let _ = self.lexer.read_token();
+			let rhs: Expr = self.parse_unary_expr()?;
+			result = match op {
+				Factor::Mul => Expr::Mul(result.into(), rhs.into()),
+				Factor::Div => Expr::Div(result.into(), rhs.into()),
+			};
+		}
 		Ok(result)
 	}
 
-	fn recurse_factor_expr(&mut self, result: &mut FactorExpr) -> Result<()> {
-		let op: Factor = match *self.lexer.peek_token()? {
-			Token::Asterisk => Factor::Mul,
-			Token::Slash => Factor::Div,
-			_ => return Ok(()),
-		};
-		// Eat `op`.
-		let _ = self.lexer.read_token();
-		let lhs: UnaryExpr = self
-			.parse_unary_expr()
-			.context("Expected unaryExpr to follow dangling operator in factorExpr!")?;
-		let mut next: FactorExpr = FactorExpr { lhs, next: None };
-		self.recurse_factor_expr(&mut next)?;
-		result.next = Some((op, Box::new(next)));
-		Ok(())
-	}
-
-	pub fn parse_unary_expr(&mut self) -> Result<UnaryExpr> {
+	pub fn parse_unary_expr(&mut self) -> Result<Expr> {
 		let op: Option<Unary> = match *self.lexer.peek_token()? {
-			Token::Minus => Some(Unary::Minus),
-			Token::ExclamationMark => Some(Unary::Negate),
-			Token::Ampersand => Some(Unary::Ref),
+			Token::Minus => Unary::Minus.into(),
+			Token::ExclamationMark => Unary::Negate.into(),
+			Token::Ampersand => Unary::Ref.into(),
 			_ => None,
 		};
 		if op.is_some() {
 			// Eat `op`.
 			let _ = self.lexer.read_token();
 		};
-		Ok(UnaryExpr {
-			op,
-			expr: self.parse_function_expr()?,
+		let rhs: Expr = self.parse_function_expr()?;
+		Ok(match op {
+			Some(unary) => Expr::Unary(unary, rhs.into()),
+			None => rhs,
 		})
 	}
 
-	pub fn parse_function_expr(&mut self) -> Result<FunctionExpr> {
+	pub fn parse_function_expr(&mut self) -> Result<Expr> {
 		todo!()
 	}
 }

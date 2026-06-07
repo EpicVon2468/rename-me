@@ -115,6 +115,9 @@ impl<'a> Lexer<'a> {
 			',' => Token::Comma,
 			'=' => Token::Equals,
 			'!' => Token::ExclamationMark,
+			'0'..='9' => {
+				todo!()
+			},
 			_ => bail!("Unrecognised char input (Lexer)!"),
 		})
 	}
