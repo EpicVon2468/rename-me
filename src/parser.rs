@@ -9,14 +9,12 @@ pub mod attrs {
 
 	macro_rules! attr_checker {
 		($fn_name:ident, $attr:expr $(,)?) => {
+			#[inline(always)]
 			pub const fn $fn_name(attributes: Attributes) -> bool {
 				attributes & $attr != 0
 			}
 		};
 	}
-
-	pub const ATTR_ALL: Attributes = 0b1111;
-	pub const ATTR_NONE: Attributes = 0b0000;
 
 	pub const ATTR_CONSTANT: Attributes = 0b0001;
 	attr_checker!(is_constant, ATTR_CONSTANT);
@@ -75,17 +73,20 @@ pub enum Factor {
 	Mul,
 }
 
-/// `unaryExpr : ( MINUS | ASTERISK | AMPERSAND )? functionExpr ;`
+/// `unaryExpr : ( MINUS | EXCLAMATION_MARK | ASTERISK | AMPERSAND )? functionExpr ;`
 pub struct UnaryExpr {
-	pub prefix: Option<Unary>,
-	pub next: FunctionExpr,
+	pub op: Option<Unary>,
+	pub expr: FunctionExpr,
 }
 
 pub enum Unary {
 	/// `-`
 	Minus,
-	/// `*`
-	Ptr,
+	/// `!`
+	Negate,
+	// FIXME: This will cause problems since it follows right after `factorExpr`.
+	//// `*`
+	// Ptr,
 	/// `&`
 	Ref,
 }
@@ -148,8 +149,7 @@ impl<'a> Parser<'a> {
 	}
 
 	fn recurse_term_expr(&mut self, result: &mut TermExpr) -> Result<()> {
-		let lookahead: &Token = self.lexer.peek_token()?;
-		let op: Term = match *lookahead {
+		let op: Term = match *self.lexer.peek_token()? {
 			Token::Plus => Term::Add,
 			Token::Minus => Term::Sub,
 			_ => return Ok(()),
@@ -166,6 +166,47 @@ impl<'a> Parser<'a> {
 	}
 
 	pub fn parse_factor_expr(&mut self) -> Result<FactorExpr> {
+		let lhs: UnaryExpr = self.parse_unary_expr()?;
+		let mut result = FactorExpr { lhs, next: None };
+		self.recurse_factor_expr(&mut result)?;
+		Ok(result)
+	}
+
+	fn recurse_factor_expr(&mut self, result: &mut FactorExpr) -> Result<()> {
+		let op: Factor = match *self.lexer.peek_token()? {
+			Token::Asterisk => Factor::Mul,
+			Token::Slash => Factor::Div,
+			_ => return Ok(()),
+		};
+		// Eat `op`.
+		let _ = self.lexer.read_token();
+		let lhs: UnaryExpr = self
+			.parse_unary_expr()
+			.context("Expected unaryExpr to follow dangling operator in factorExpr!")?;
+		let mut next: FactorExpr = FactorExpr { lhs, next: None };
+		self.recurse_factor_expr(&mut next)?;
+		result.next = Some((op, Box::new(next)));
+		Ok(())
+	}
+
+	pub fn parse_unary_expr(&mut self) -> Result<UnaryExpr> {
+		let op: Option<Unary> = match *self.lexer.peek_token()? {
+			Token::Minus => Some(Unary::Minus),
+			Token::ExclamationMark => Some(Unary::Negate),
+			Token::Ampersand => Some(Unary::Ref),
+			_ => None,
+		};
+		if op.is_some() {
+			// Eat `op`.
+			let _ = self.lexer.read_token();
+		};
+		Ok(UnaryExpr {
+			op,
+			expr: self.parse_function_expr()?,
+		})
+	}
+
+	pub fn parse_function_expr(&mut self) -> Result<FunctionExpr> {
 		todo!()
 	}
 }

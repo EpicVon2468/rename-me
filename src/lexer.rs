@@ -69,6 +69,8 @@ pub enum Token {
 	Comma,
 	/// `EQUALS : '=' ;`
 	Equals,
+	/// `EXCLAMATION_MARK : '!' ;`
+	ExclamationMark,
 }
 
 pub type Src<'a> = &'a mut dyn BufRead;
@@ -112,7 +114,8 @@ impl<'a> Lexer<'a> {
 			'&' => Token::Ampersand,
 			',' => Token::Comma,
 			'=' => Token::Equals,
-			_ => bail!(""),
+			'!' => Token::ExclamationMark,
+			_ => bail!("Unrecognised char input (Lexer)!"),
 		})
 	}
 
