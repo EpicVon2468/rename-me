@@ -1,6 +1,42 @@
-use anyhow::Result;
+use std::collections::HashMap;
+
+use anyhow::{Context as _, Result};
 
 use crate::lexer::{Lexer, Src, Token};
+
+pub mod attrs {
+	pub type Attributes = u8;
+
+	macro_rules! attr_checker {
+		($fn_name:ident, $attr:expr $(,)?) => {
+			pub const fn $fn_name(attributes: Attributes) -> bool {
+				attributes & $attr != 0
+			}
+		};
+	}
+
+	pub const ATTR_ALL: Attributes = 0b1111;
+	pub const ATTR_NONE: Attributes = 0b0000;
+
+	pub const ATTR_CONSTANT: Attributes = 0b0001;
+	attr_checker!(is_constant, ATTR_CONSTANT);
+
+	pub const ATTR_UNSAFE: Attributes = 0b0010;
+	attr_checker!(is_unsafe, ATTR_UNSAFE);
+
+	pub const ATTR_EXTERNAL: Attributes = 0b0100;
+	attr_checker!(is_external, ATTR_EXTERNAL);
+}
+
+use attrs::Attributes;
+
+pub struct FunctionDeclaration {
+	pub attributes: Attributes,
+	pub identifier: String,
+	// TODO: identifier : type
+	pub parameters: HashMap<String, String>,
+	pub return_type: String,
+}
 
 /// `stmt : variableStmt | assignmentStmt | unitStmt ;`
 pub enum Stmt {
@@ -20,7 +56,7 @@ pub struct Expr(TermExpr);
 /// `termExpr : factorExpr ( ( PLUS | MINUS ) factorExpr )* ;`
 pub struct TermExpr {
 	pub lhs: FactorExpr,
-	pub next: Option<(Term, FactorExpr)>,
+	pub next: Option<(Term, Box<Self>)>,
 }
 
 pub enum Term {
@@ -31,7 +67,7 @@ pub enum Term {
 /// `factorExpr : unaryExpr ( ( SLASH | ASTERISK ) unaryExpr )* ;`
 pub struct FactorExpr {
 	pub lhs: UnaryExpr,
-	pub next: Option<(Factor, UnaryExpr)>,
+	pub next: Option<(Factor, Box<Self>)>,
 }
 
 pub enum Factor {
@@ -71,8 +107,7 @@ pub enum PrimaryExpr {
 
 /// `blockExpr : ( CONSTANT? UNSAFE? )? OPEN_BRACE stmt* expr CLOSE_BRACE ;`
 pub struct BlockExpr {
-	is_unsafe: bool,
-	is_const: bool,
+	attributes: Attributes,
 	body: Vec<Stmt>,
 	final_value: Expr,
 }
@@ -102,20 +137,35 @@ impl<'a> Parser<'a> {
 	}
 
 	pub fn parse_expr(&mut self) -> Result<Expr> {
-		self.parse_term().map(Expr)
+		self.parse_term_expr().map(Expr)
 	}
 
-	pub fn parse_term(&mut self) -> Result<TermExpr> {
-		let _lhs: FactorExpr = self.parse_factor()?;
-		let next: &Token = self.lexer.peek_token()?;
-		#[allow(clippy::match_single_binding)]
-		match *next {
-			_ => (),
-		}
-		todo!()
+	pub fn parse_term_expr(&mut self) -> Result<TermExpr> {
+		let lhs: FactorExpr = self.parse_factor_expr()?;
+		let mut result: TermExpr = TermExpr { lhs, next: None };
+		self.recurse_term_expr(&mut result)?;
+		Ok(result)
 	}
 
-	pub fn parse_factor(&mut self) -> Result<FactorExpr> {
+	fn recurse_term_expr(&mut self, result: &mut TermExpr) -> Result<()> {
+		let lookahead: &Token = self.lexer.peek_token()?;
+		let op: Term = match *lookahead {
+			Token::Plus => Term::Add,
+			Token::Minus => Term::Sub,
+			_ => return Ok(()),
+		};
+		// Eat `op`.
+		let _ = self.lexer.read_token();
+		let lhs: FactorExpr = self
+			.parse_factor_expr()
+			.context("Expected factorExpr to follow dangling operator in termExpr!")?;
+		let mut next: TermExpr = TermExpr { lhs, next: None };
+		self.recurse_term_expr(&mut next)?;
+		result.next = Some((op, Box::new(next)));
+		Ok(())
+	}
+
+	pub fn parse_factor_expr(&mut self) -> Result<FactorExpr> {
 		todo!()
 	}
 }
