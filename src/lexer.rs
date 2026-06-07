@@ -86,9 +86,13 @@ impl<'a> Lexer<'a> {
 		Self { src, cached: None }
 	}
 
-	#[expect(clippy::panic_in_result_fn)]
 	pub fn peek_token(&mut self) -> Result<&Token> {
-		assert_eq!(self.cached, None);
+		// SANITY(unusual):
+		// This check is here to prevent performing `Option::take()` only to immediately `Option::insert()` the same value.
+		// This does mean it is impossible peek further than one token forward.  This behaviour is intentional.
+		if let Some(ref value) = self.cached {
+			return Ok(value);
+		};
 		let result: Token = self.read_token()?;
 		Ok(self.cached.insert(result))
 	}
