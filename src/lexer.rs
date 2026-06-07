@@ -25,8 +25,12 @@ pub enum Token {
 	Unsafe,
 	/// `EXTERNAL : 'e' 'x' 't' 'e' 'r' 'n' ;`
 	External,
+	/// `CONSTANT : 'c' 'o' 'n' 's' 't' ;`
+	Constant,
 	/// `RETURN : 'r' 'e' 't' 'u' 'r' 'n' ;`
 	Return,
+	/// `VAL : 'v' 'a' 'l' ;`
+	Val,
 	/// `OPEN_BRACE : '{' ;`
 	OpenBrace,
 	/// `CLOSE_BRACE : '}' ;`
@@ -57,23 +61,42 @@ pub enum Token {
 	///
 	/// `MINUS : '-' ;`
 	Minus,
+	/// Borrow or 'boolean and'.
+	///
+	/// `AMPERSAND : '&' ;`
+	Ampersand,
+	/// `COMMA : ',' ;`
+	Comma,
+	/// `EQUALS : '=' ;`
+	Equals,
 }
 
 pub type Src<'a> = &'a mut dyn BufRead;
 
 pub struct Lexer<'a> {
-	// TODO: use `BufRead::fill_buf()` to 'peek'.
+	// TODO: use `BufRead::fill_buf()` to 'peek' chars.
 	src: Src<'a>,
+	cached: Option<Token>,
 }
 
 impl<'a> Lexer<'a> {
 	pub fn new(src: Src<'a>) -> Self {
-		Self { src }
+		Self { src, cached: None }
+	}
+
+	#[expect(clippy::panic_in_result_fn)]
+	pub fn peek_token(&mut self) -> Result<&Token> {
+		assert_eq!(self.cached, None);
+		let result: Token = self.read_token()?;
+		Ok(self.cached.insert(result))
 	}
 
 	pub fn read_token(&mut self) -> Result<Token> {
+		if let Some(token) = self.cached.take() {
+			return Ok(token);
+		};
 		let first: char = self.read_until_substantial_char()?;
-		match first {
+		Ok(match first {
 			'{' => Token::OpenBrace,
 			'}' => Token::CloseBrace,
 			'(' => Token::OpenBracket,
@@ -86,9 +109,11 @@ impl<'a> Lexer<'a> {
 			'*' => Token::Asterisk,
 			'+' => Token::Plus,
 			'-' => Token::Minus,
-			_ => todo!(),
-		};
-		todo!()
+			'&' => Token::Ampersand,
+			',' => Token::Comma,
+			'=' => Token::Equals,
+			_ => bail!(""),
+		})
 	}
 
 	pub fn read_until_substantial_char(&mut self) -> Result<char> {

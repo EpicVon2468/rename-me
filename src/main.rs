@@ -57,19 +57,22 @@
 #![doc = include_str!("../README.md")]
 pub mod codegen;
 pub mod lexer;
+pub mod parser;
 
 use anyhow::Result;
 
-use inkwell::support::enable_llvm_pretty_stack_trace;
+use inkwell::support::{enable_llvm_pretty_stack_trace, get_llvm_version};
 
 use crate::codegen::CodeGen;
-use crate::lexer::Lexer;
+use crate::parser::Parser;
 
 pub fn main() -> Result<()> {
 	let mut input: &[u8] = "ﬀ".as_bytes();
-	let mut lexer: Lexer = Lexer::new(&mut input);
-	let _ = dbg!(lexer.read_char())?;
+	let mut parser: Parser = Parser::from(&mut input);
+	parser.parse()?;
 	enable_llvm_pretty_stack_trace();
+	let (major, minor, patch): (u32, u32, u32) = get_llvm_version();
+	println!("Loading with LLVM version {major}.{minor}.{patch}...");
 	let codegen: CodeGen = CodeGen::new("test");
 	codegen.debug();
 	Ok(())
