@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::hint::{cold_path, unreachable_unchecked};
 use std::io::BufRead;
 
@@ -13,11 +14,11 @@ pub enum Token {
 	Identifier(String),
 	/// Integer value.
 	///
-	/// `LITERAL : MINUS? NUM+ ( '_' NUM+ )* ;`
+	/// `LITERAL : NUM+ ( '_' NUM+ )* ;`
 	Literal(String),
 	/// Floating-point value.
 	///
-	/// `REAL : MINUS? NUM+ ( '_' NUM+ )* ( '.' NUM+ ( '_' NUM+ )* )? 'f' ;`
+	/// `REAL : NUM+ ( '_' NUM+ )* ( '.' NUM+ ( '_' NUM+ )* )? 'f' ;`
 	Real(String),
 	/// `FUNCTION : 'f' 'u' 'n' 'c' 't' ;`
 	Function,
@@ -79,11 +80,29 @@ pub struct Lexer<'a> {
 	// TODO: use `BufRead::fill_buf()` to 'peek' chars.
 	src: Src<'a>,
 	cached: Option<Token>,
+	cached_chars: VecDeque<char>,
+}
+
+macro_rules! expect_char {
+	($actual:expr; $($expected:expr),* $(,)?) => {
+		$(expect_char!($actual, $expected);)*
+	};
+	($actual:expr, $expected:expr $(,)?) => {{
+		let actual = $actual;
+		let expected = $expected;
+		if actual != expected {
+			bail!("Unexpected char reached, expected '{expected}', got '{actual}'!");
+		};
+	}};
 }
 
 impl<'a> Lexer<'a> {
 	pub fn new(src: Src<'a>) -> Self {
-		Self { src, cached: None }
+		Self {
+			src,
+			cached: None,
+			cached_chars: VecDeque::new(),
+		}
 	}
 
 	pub fn peek_token(&mut self) -> Result<&Token> {
@@ -101,8 +120,33 @@ impl<'a> Lexer<'a> {
 		if let Some(token) = self.cached.take() {
 			return Ok(token);
 		};
-		let first: char = self.read_until_substantial_char()?;
+		let first: char = self.next_substantial_char()?;
 		Ok(match first {
+			// TODO: handle how identifiers conflict with these keywords
+			'f' => {
+				expect_char!(self.read_char()?; 'u', 'n', 'c', 't');
+				Token::Function
+			},
+			'u' => {
+				expect_char!(self.read_char()?; 'n', 's', 'a', 'f', 'e');
+				Token::Unsafe
+			},
+			'e' => {
+				expect_char!(self.read_char()?; 'x', 't', 'e', 'r', 'n');
+				Token::External
+			},
+			'c' => {
+				expect_char!(self.read_char()?; 'o', 'n', 's', 't');
+				Token::Constant
+			},
+			'r' => {
+				expect_char!(self.read_char()?; 'e', 't', 'u', 'r', 'n');
+				Token::Return
+			},
+			'v' => {
+				expect_char!(self.read_char()?; 'a', 'l');
+				Token::Val
+			},
 			'{' => Token::OpenBrace,
 			'}' => Token::CloseBrace,
 			'(' => Token::OpenBracket,
@@ -126,7 +170,13 @@ impl<'a> Lexer<'a> {
 		})
 	}
 
-	pub fn read_until_substantial_char(&mut self) -> Result<char> {
+	fn peek_char(&mut self) -> Result<char> {
+		let next: char = self.next_substantial_char()?;
+		self.cached_chars.push_back(next);
+		Ok(next)
+	}
+
+	fn next_substantial_char(&mut self) -> Result<char> {
 		let mut current: char = self.read_char()?;
 		while current.is_whitespace() {
 			current = self.read_char()?;
@@ -141,6 +191,13 @@ impl<'a> Lexer<'a> {
 	}
 
 	pub fn read_char(&mut self) -> Result<char> {
+		if let Some(cached) = self.cached_chars.pop_back() {
+			return Ok(cached);
+		};
+		self.read_char_impl()
+	}
+
+	fn read_char_impl(&mut self) -> Result<char> {
 		let [initial]: [u8; 1] = {
 			let mut buf: [u8; 1] = [0; 1];
 			self.read(&mut buf)?;

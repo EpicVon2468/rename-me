@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::hint::unreachable_unchecked;
 
 use anyhow::{Result, bail};
 
@@ -26,7 +27,7 @@ pub mod attrs {
 	attr_checker!(is_external, ATTR_EXTERNAL);
 }
 
-use attrs::Attributes;
+use attrs::{ATTR_CONSTANT, ATTR_UNSAFE, Attributes};
 
 pub struct FunctionDeclaration {
 	pub attributes: Attributes,
@@ -62,6 +63,7 @@ pub enum Expr {
 	Unary(Unary, Box<Self>),
 	/// `functionCallExpr : IDENTIFIER OPEN_BRACKET ( expr ( COMMA expr )* )? CLOSE_BRACKET ;`
 	FunctionCall(String, Vec<Self>),
+	VariableRef(String),
 	/// `blockExpr : ( CONSTANT? UNSAFE? )? OPEN_BRACE stmt* expr CLOSE_BRACE ;`
 	Block(Attributes, Vec<Stmt>, Box<Self>),
 	IntegerLiteral(i32),
@@ -95,7 +97,7 @@ pub struct Parser<'a> {
 }
 
 macro_rules! expect_token {
-	($expected:expr, $actual:expr $(,)?) => {{
+	($actual:expr, $expected:expr $(,)?) => {{
 		let token = $actual;
 		let expected = $expected;
 		if token != expected {
@@ -135,10 +137,11 @@ impl<'a> Parser<'a> {
 			};
 			// Eat `op`.
 			// SANITY(unchecked):
-			// Lexer caches the last peeked token and returns it on next read.
+			// `Lexer` caches the last peeked token and returns it on next read.
 			// This means that a subsequent call to `Lexer::read_token()` after a call to `Lexer::peek_token()` will always return the same value.
 			// Therefore, it is always safe to assume this is the correct token and leave the return value unchecked.
-			let _ = self.lexer.read_token()?;
+			// This includes leaving the `Result` untouched, as no actual I/O operation occurs.
+			let _ = self.lexer.read_token();
 			let rhs: Expr = self.parse_factor_expr()?;
 			result = match op {
 				Term::Add => Expr::Add(result.into(), rhs.into()),
@@ -158,10 +161,11 @@ impl<'a> Parser<'a> {
 			};
 			// Eat `op`.
 			// SANITY(unchecked):
-			// Lexer caches the last peeked token and returns it on next read.
+			// `Lexer` caches the last peeked token and returns it on next read.
 			// This means that a subsequent call to `Lexer::read_token()` after a call to `Lexer::peek_token()` will always return the same value.
 			// Therefore, it is always safe to assume this is the correct token and leave the return value unchecked.
-			let _ = self.lexer.read_token()?;
+			// This includes leaving the `Result` untouched, as no actual I/O operation occurs.
+			let _ = self.lexer.read_token();
 			let rhs: Expr = self.parse_unary_expr()?;
 			result = match op {
 				Factor::Mul => Expr::Mul(result.into(), rhs.into()),
@@ -181,10 +185,11 @@ impl<'a> Parser<'a> {
 		let result: Expr = if let Some(unary) = op {
 			// Eat `op`.
 			// SANITY(unchecked):
-			// Lexer caches the last peeked token and returns it on next read.
+			// `Lexer` caches the last peeked token and returns it on next read.
 			// This means that a subsequent call to `Lexer::read_token()` after a call to `Lexer::peek_token()` will always return the same value.
 			// Therefore, it is always safe to assume this is the correct token and leave the return value unchecked.
-			let _ = self.lexer.read_token()?;
+			// This includes leaving the `Result` untouched, as no actual I/O operation occurs.
+			let _ = self.lexer.read_token();
 			Expr::Unary(unary, self.parse_function_expr()?.into())
 		} else {
 			self.parse_function_expr()?
@@ -201,23 +206,25 @@ impl<'a> Parser<'a> {
 		let identifier: String = identifier.to_owned();
 		// Eat `identifier`.
 		// SANITY(unchecked):
-		// Lexer caches the last peeked token and returns it on next read.
+		// `Lexer` caches the last peeked token and returns it on next read.
 		// This means that a subsequent call to `Lexer::read_token()` after a call to `Lexer::peek_token()` will always return the same value.
 		// Therefore, it is always safe to assume this is the correct token and leave the return value unchecked.
-		let _ = self.lexer.read_token()?;
+		// This includes leaving the `Result` untouched, as no actual I/O operation occurs.
+		let _ = self.lexer.read_token();
 
 		// Eat '('.
 		// SANITY(unexpected): The next token should always be '('.
-		expect_token!(Token::OpenBracket, self.lexer.read_token()?);
+		expect_token!(self.lexer.read_token()?, Token::OpenBracket);
 
 		// SANITY(fast-path): No need to allocate a proper `Vec` or loop if there are no parameters.
 		if self.lexer.peek_token()? == &Token::CloseBracket {
 			// Eat ')'.
 			// SANITY(unchecked):
-			// Lexer caches the last peeked token and returns it on next read.
+			// `Lexer` caches the last peeked token and returns it on next read.
 			// This means that a subsequent call to `Lexer::read_token()` after a call to `Lexer::peek_token()` will always return the same value.
 			// Therefore, it is always safe to assume this is the correct token and leave the return value unchecked.
-			let _ = self.lexer.read_token()?;
+			// This includes leaving the `Result` untouched, as no actual I/O operation occurs.
+			let _ = self.lexer.read_token();
 			return Ok(Expr::FunctionCall(identifier, Vec::new()));
 		};
 
@@ -235,6 +242,66 @@ impl<'a> Parser<'a> {
 	}
 
 	pub fn parse_primary_expr(&mut self) -> Result<Expr> {
-		todo!()
+		let expr: Expr = match *self.lexer.peek_token()? {
+			// SAFETY: This match arm ensures the next token is valid for a `blockExpr`.
+			Token::Constant | Token::Unsafe | Token::OpenBrace => unsafe {
+				self.parse_block_expr()?
+			},
+			Token::Identifier(_) => {
+				let Ok(Token::Identifier(identifier)): Result<Token> = self.lexer.read_token()
+				else {
+					// SANITY(unreachable):
+					// `Lexer` caches the last peeked token and returns it on next read.
+					// This means that a subsequent call to `Lexer::read_token()` after a call to `Lexer::peek_token()` will always return the same value.
+					// No actual I/O operations occur during the subsequent call, thus errors are also impossible.
+					// SAFETY:
+					// Problem(s):
+					// - `unreachable_unchecked()` is unsafe, and it is Undefined Behaviour for it to be reached.
+					// Excuse(s):
+					// - This statement cannot be reached.
+					unsafe {
+						unreachable_unchecked();
+					};
+				};
+				Expr::VariableRef(identifier)
+			},
+			// TODO: literals
+			_ => todo!(),
+		};
+		Ok(expr)
+	}
+
+	/// # Safety
+	///
+	/// Unlike the other parsing [`Expr`] parsing methods defined in [`Self`], this method _does not_ hand off parsing down to any other kind of expression on failure to match the correct initial token(s).
+	///
+	/// Callers must, _at minimum_ ensure that the next token is valid for a `blockExpr`.
+	pub unsafe fn parse_block_expr(&mut self) -> Result<Expr> {
+		let mut attributes: Attributes = 0;
+		match self.lexer.read_token()? {
+			Token::Constant => {
+				attributes |= ATTR_CONSTANT;
+				if self.lexer.peek_token()? == &Token::Unsafe {
+					// SANITY(unchecked):
+					// `Lexer` caches the last peeked token and returns it on next read.
+					// This means that a subsequent call to `Lexer::read_token()` after a call to `Lexer::peek_token()` will always return the same value.
+					// Therefore, it is always safe to assume this is the correct token and leave the return value unchecked.
+					// This includes leaving the `Result` untouched, as no actual I/O operation occurs.
+					let _ = self.lexer.read_token();
+					attributes |= ATTR_UNSAFE;
+				};
+				// SANITY(unexpected): The next token should always be '{'.
+				expect_token!(self.lexer.read_token()?, Token::OpenBrace);
+			},
+			Token::Unsafe => {
+				attributes |= ATTR_UNSAFE;
+				// SANITY(unexpected): The next token should always be '{'.
+				expect_token!(self.lexer.read_token()?, Token::OpenBrace);
+			},
+			Token::OpenBrace => (),
+			_ => bail!("Unexpected token reached!"),
+		};
+		let expr: Expr = Expr::Block(attributes, todo!(), todo!());
+		Ok(expr)
 	}
 }
