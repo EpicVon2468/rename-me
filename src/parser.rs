@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::hint::unreachable_unchecked;
 use std::str::FromStr as _;
 
-use anyhow::{Result, bail};
+use anyhow::{Context as _, Result, bail};
 
 use crate::lexer::{Lexer, Src, Token};
 
@@ -108,6 +108,30 @@ macro_rules! expect_token {
 	}};
 }
 
+macro_rules! handle_erroneous {
+	($lexer:expr, $lookahead:expr) => {{
+		if matches!(
+			$lookahead,
+			Token::Identifier(_)
+				| Token::Literal(_)
+				| Token::Real(_)
+				| Token::Function
+				| Token::Unsafe
+				| Token::External
+				| Token::Constant
+				| Token::Return
+				| Token::Val | Token::OpenBrace
+				| Token::OpenBracket
+				| Token::OpenSquareBracket
+				| Token::Colon
+				| Token::ExclamationMark
+		) {
+			let erroneous: Token = $lexer.read_token().expect("Cached.");
+			bail!("Ran into erroneous token whilst parsing termExpr.  Token was: {erroneous:?}!");
+		};
+	}};
+}
+
 impl<'a> Parser<'a> {
 	#[must_use]
 	pub const fn new(lexer: Lexer<'a>) -> Self {
@@ -132,10 +156,14 @@ impl<'a> Parser<'a> {
 	pub fn parse_term_expr(&mut self) -> Result<Expr> {
 		let mut result: Expr = self.parse_factor_expr()?;
 		loop {
-			let op: Term = match *self.lexer.peek_token()? {
+			let lookahead: &Token = self.lexer.peek_token()?;
+			let op: Term = match *lookahead {
 				Token::Plus => Term::Add,
 				Token::Minus => Term::Sub,
-				_ => break,
+				_ => {
+					handle_erroneous!(self.lexer, lookahead);
+					break;
+				},
 			};
 			// Eat `op`.
 			let _ = self.lexer.read_token();
@@ -151,10 +179,14 @@ impl<'a> Parser<'a> {
 	pub fn parse_factor_expr(&mut self) -> Result<Expr> {
 		let mut result: Expr = self.parse_unary_expr()?;
 		loop {
-			let op: Factor = match *self.lexer.peek_token()? {
+			let lookahead: &Token = self.lexer.peek_token()?;
+			let op: Factor = match *lookahead {
 				Token::Asterisk => Factor::Mul,
 				Token::Slash => Factor::Div,
-				_ => break,
+				_ => {
+					handle_erroneous!(self.lexer, lookahead);
+					break;
+				},
 			};
 			// Eat `op`.
 			let _ = self.lexer.read_token();
@@ -262,7 +294,8 @@ impl<'a> Parser<'a> {
 			// SAFETY: This match arm ensures the next token will be `Token::Identifier`.
 			Token::Identifier(_) => Expr::VariableRef(unsafe { self.take_identifier() }),
 			Token::Literal(ref literal) => {
-				let value: i128 = i128::from_str(literal)?;
+				let value: i128 =
+					i128::from_str(literal).context("Couldn't parse integer literal.")?;
 				// Eat `value`.
 				let _ = self.lexer.read_token();
 				Expr::IntegerLiteral(value)
@@ -270,7 +303,8 @@ impl<'a> Parser<'a> {
 			Token::Real(ref real) => {
 				// Trim 'f' suffix so f64 can parse it.
 				let trimmed: &str = &real[0..(real.len() - 1)];
-				let value: f64 = f64::from_str(trimmed)?;
+				let value: f64 =
+					f64::from_str(trimmed).context("Couldn't parse floating-point literal.")?;
 				// Eat `value`.
 				let _ = self.lexer.read_token();
 				Expr::FloatLiteral(value)

@@ -181,7 +181,6 @@ impl<'a> Lexer<'a> {
 		})
 	}
 
-	// FIXME: so much of this is cursed and broken.
 	fn read_num_chars(&mut self) -> Result<String> {
 		let mut buf: String = String::with_capacity(8);
 		let (mut invalid, mut seen_period): (bool, bool) = (true, false);
@@ -205,15 +204,20 @@ impl<'a> Lexer<'a> {
 		if invalid {
 			bail!("Invalid number '{buf}'!");
 		};
-		if seen_period && current != 'f' {
-			expect_char!(self.read_char()?, 'f');
-			buf.push('f');
-		} else if current == 'f' {
+		if seen_period {
+			expect_char!(current, 'f');
+		};
+		if current == 'f' {
+			static NEXT_VALID_VALUES: &[char] = &[';', '}', '-', '+', '*', '/', '&', '|'];
+
 			buf.push(current);
 			let next: char = self.read_char()?;
-			if next.is_ascii_alphanumeric() || next == '.' {
-				bail!("Unexpected trailing character(s) found after float literal '{buf}'!  First trailing was '{next}'!")
-			} else if !next.is_whitespace() {
+			let is_next_significant: bool = !next.is_whitespace();
+
+			if !NEXT_VALID_VALUES.contains(&next) && is_next_significant {
+				bail!("Unexpected character(s) found after real '{buf}'!  First was '{next}'!")
+			};
+			if is_next_significant {
 				self.cached_chars.push_back(next);
 			};
 		};
