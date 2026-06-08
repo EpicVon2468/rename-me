@@ -197,20 +197,41 @@ impl<'a> Parser<'a> {
 		Ok(result)
 	}
 
+	/// Shorthand to prevent cloning the body of [`Token::Identifier`] on a peek match.
+	///
+	/// # Safety
+	///
+	/// This function is _only_ safe to call if the previously [`peeked`][`Lexer::peek_token`] token was [`Token::Identifier`].
+	///
+	/// Calling this in any other case is Undefined Behaviour.
+	///
+	/// Callers are responsible for upholding the contract as specified.
+	pub unsafe fn take_identifier(&mut self) -> String {
+		let Ok(Token::Identifier(identifier)): Result<Token> = self.lexer.read_token() else {
+			// SANITY(unreachable):
+			// `Lexer` caches the last peeked token and returns it on next read.
+			// This means that a subsequent call to `Lexer::read_token()` after a call to `Lexer::peek_token()` will always return the same value.
+			// No actual I/O operations occur during the subsequent call, thus errors are also impossible.
+			// SAFETY:
+			// Problem(s):
+			// - `unreachable_unchecked()` is unsafe, and it is Undefined Behaviour for it to be reached.
+			// Excuse(s):
+			// - This statement cannot be reached.
+			unsafe {
+				unreachable_unchecked();
+			};
+		};
+		identifier
+	}
+
 	pub fn parse_function_expr(&mut self) -> Result<Expr> {
-		// TODO: Figure out whether this conflicts with variable references.
-		let Token::Identifier(ref identifier): Token = *self.lexer.peek_token()? else {
+		// FIXME: This conflicts with identifiers.
+		let Token::Identifier(_): Token = *self.lexer.peek_token()? else {
 			return self.parse_primary_expr();
 		};
-		// SANITY(unusual): Needs to be made owned here because of borrowing rules.
-		let identifier: String = identifier.to_owned();
-		// Eat `identifier`.
-		// SANITY(unchecked):
-		// `Lexer` caches the last peeked token and returns it on next read.
-		// This means that a subsequent call to `Lexer::read_token()` after a call to `Lexer::peek_token()` will always return the same value.
-		// Therefore, it is always safe to assume this is the correct token and leave the return value unchecked.
-		// This includes leaving the `Result` untouched, as no actual I/O operation occurs.
-		let _ = self.lexer.read_token();
+		// SANITY(unusual): This is cheaper than calling `String::to_owned` to duplicate the reference from peeking.
+		// SAFETY: The code above this line confirms that the next token will be `Token::Identifier`.
+		let identifier: String = unsafe { self.take_identifier() };
 
 		// Eat '('.
 		// SANITY(unexpected): The next token should always be '('.
@@ -247,24 +268,8 @@ impl<'a> Parser<'a> {
 			Token::Constant | Token::Unsafe | Token::OpenBrace => unsafe {
 				self.parse_block_expr()?
 			},
-			Token::Identifier(_) => {
-				let Ok(Token::Identifier(identifier)): Result<Token> = self.lexer.read_token()
-				else {
-					// SANITY(unreachable):
-					// `Lexer` caches the last peeked token and returns it on next read.
-					// This means that a subsequent call to `Lexer::read_token()` after a call to `Lexer::peek_token()` will always return the same value.
-					// No actual I/O operations occur during the subsequent call, thus errors are also impossible.
-					// SAFETY:
-					// Problem(s):
-					// - `unreachable_unchecked()` is unsafe, and it is Undefined Behaviour for it to be reached.
-					// Excuse(s):
-					// - This statement cannot be reached.
-					unsafe {
-						unreachable_unchecked();
-					};
-				};
-				Expr::VariableRef(identifier)
-			},
+			// SAFETY: This match arm ensures the next token will be `Token::Identifier`.
+			Token::Identifier(_) => Expr::VariableRef(unsafe { self.take_identifier() }),
 			// TODO: literals
 			_ => todo!(),
 		};

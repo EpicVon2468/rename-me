@@ -67,7 +67,7 @@ use crate::codegen::CodeGen;
 use crate::parser::Parser;
 
 pub fn main() -> Result<()> {
-	let mut input: &[u8] = b"unsafe { 4 / 2 }";
+	let mut input: &[u8] = b"unsafe { 4 * 2 }";
 	let mut parser: Parser = Parser::from(&mut input);
 	parser.parse()?;
 	enable_llvm_pretty_stack_trace();
