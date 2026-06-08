@@ -67,7 +67,8 @@ pub enum Expr {
 	VariableRef(String),
 	/// `blockExpr : ( CONSTANT? UNSAFE? )? OPEN_BRACE stmt* expr CLOSE_BRACE ;`
 	Block(Attributes, Vec<Stmt>, Box<Self>),
-	IntegerLiteral(i32),
+	IntegerLiteral(i128),
+	FloatLiteral(f64),
 }
 
 pub enum Term {
@@ -137,11 +138,6 @@ impl<'a> Parser<'a> {
 				_ => break,
 			};
 			// Eat `op`.
-			// SANITY(unchecked):
-			// `Lexer` caches the last peeked token and returns it on next read.
-			// This means that a subsequent call to `Lexer::read_token()` after a call to `Lexer::peek_token()` will always return the same value.
-			// Therefore, it is always safe to assume this is the correct token and leave the return value unchecked.
-			// This includes leaving the `Result` untouched, as no actual I/O operation occurs.
 			let _ = self.lexer.read_token();
 			let rhs: Expr = self.parse_factor_expr()?;
 			result = match op {
@@ -161,11 +157,6 @@ impl<'a> Parser<'a> {
 				_ => break,
 			};
 			// Eat `op`.
-			// SANITY(unchecked):
-			// `Lexer` caches the last peeked token and returns it on next read.
-			// This means that a subsequent call to `Lexer::read_token()` after a call to `Lexer::peek_token()` will always return the same value.
-			// Therefore, it is always safe to assume this is the correct token and leave the return value unchecked.
-			// This includes leaving the `Result` untouched, as no actual I/O operation occurs.
 			let _ = self.lexer.read_token();
 			let rhs: Expr = self.parse_unary_expr()?;
 			result = match op {
@@ -185,11 +176,6 @@ impl<'a> Parser<'a> {
 		};
 		let result: Expr = if let Some(unary) = op {
 			// Eat `op`.
-			// SANITY(unchecked):
-			// `Lexer` caches the last peeked token and returns it on next read.
-			// This means that a subsequent call to `Lexer::read_token()` after a call to `Lexer::peek_token()` will always return the same value.
-			// Therefore, it is always safe to assume this is the correct token and leave the return value unchecked.
-			// This includes leaving the `Result` untouched, as no actual I/O operation occurs.
 			let _ = self.lexer.read_token();
 			Expr::Unary(unary, self.parse_function_expr()?.into())
 		} else {
@@ -241,11 +227,6 @@ impl<'a> Parser<'a> {
 		// SANITY(fast-path): No need to allocate a proper `Vec` or loop if there are no parameters.
 		if self.lexer.peek_token()? == &Token::CloseBracket {
 			// Eat ')'.
-			// SANITY(unchecked):
-			// `Lexer` caches the last peeked token and returns it on next read.
-			// This means that a subsequent call to `Lexer::read_token()` after a call to `Lexer::peek_token()` will always return the same value.
-			// Therefore, it is always safe to assume this is the correct token and leave the return value unchecked.
-			// This includes leaving the `Result` untouched, as no actual I/O operation occurs.
 			let _ = self.lexer.read_token();
 			return Ok(Expr::FunctionCall(identifier, Vec::new()));
 		};
@@ -269,22 +250,32 @@ impl<'a> Parser<'a> {
 			Token::Constant | Token::Unsafe | Token::OpenBrace => unsafe {
 				self.parse_block_expr()?
 			},
+			Token::OpenBracket => {
+				// Eat '('.
+				let _ = self.lexer.read_token();
+				let result: Expr = self.parse_expr()?;
+				// SANITY(unexpected): The next token should always be ')'.
+				expect_token!(self.lexer.read_token()?, Token::CloseBracket);
+				result
+			},
 			// SANITY(unusual): This is cheaper than calling `<&String>::to_owned` to duplicate the reference from peeking.
 			// SAFETY: This match arm ensures the next token will be `Token::Identifier`.
 			Token::Identifier(_) => Expr::VariableRef(unsafe { self.take_identifier() }),
-			// TODO: literals
 			Token::Literal(ref literal) => {
-				let value: i32 = i32::from_str(literal)?;
-				// Eat 'value'.
-				// SANITY(unchecked):
-				// `Lexer` caches the last peeked token and returns it on next read.
-				// This means that a subsequent call to `Lexer::read_token()` after a call to `Lexer::peek_token()` will always return the same value.
-				// Therefore, it is always safe to assume this is the correct token and leave the return value unchecked.
-				// This includes leaving the `Result` untouched, as no actual I/O operation occurs.
+				let value: i128 = i128::from_str(literal)?;
+				// Eat `value`.
 				let _ = self.lexer.read_token();
 				Expr::IntegerLiteral(value)
 			},
-			_ => todo!(),
+			Token::Real(ref real) => {
+				// Trim 'f' suffix so f64 can parse it.
+				let trimmed: &str = &real[0..(real.len() - 1)];
+				let value: f64 = f64::from_str(trimmed)?;
+				// Eat `value`.
+				let _ = self.lexer.read_token();
+				Expr::FloatLiteral(value)
+			},
+			_ => todo!("Is this unreachable?"),
 		};
 		Ok(expr)
 	}

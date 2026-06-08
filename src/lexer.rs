@@ -100,12 +100,6 @@ macro_rules! expect_char {
 	}};
 }
 
-macro_rules! matches_ahead {
-	($input:expr; $($expected:expr),* $(,)?) => {
-		true $(&& $input == $expected)*
-	};
-}
-
 #[allow(clippy::inline_always)]
 #[inline(always)]
 const fn is_valid_for_identifier_first(input: char) -> bool {
@@ -142,7 +136,7 @@ impl<'a> Lexer<'a> {
 		if let Some(token) = self.cached.take() {
 			return Ok(token);
 		};
-		let first: char = self.next_substantial_char()?;
+		let first: char = self.next_sig_char()?;
 		Ok(match first {
 			_ if is_valid_for_identifier_first(first) => {
 				// Restore first to stack so `Self::read_ident_chars()` will eat it.
@@ -155,6 +149,16 @@ impl<'a> Lexer<'a> {
 					"return" => Token::Return,
 					"val" => Token::Val,
 					identifier => Token::Identifier(identifier.to_owned()),
+				}
+			},
+			'0'..='9' => {
+				// Restore first to stack so `Self::read_num_chars()` will eat it.
+				self.cached_chars.push_back(first);
+				let value: String = self.read_num_chars()?;
+				if value.ends_with('f') {
+					Token::Real(value)
+				} else {
+					Token::Literal(value)
 				}
 			},
 			'{' => Token::OpenBrace,
@@ -173,10 +177,47 @@ impl<'a> Lexer<'a> {
 			',' => Token::Comma,
 			'=' => Token::Equals,
 			'!' => Token::ExclamationMark,
-			// FIXME: Implement similar lexing function to `Self::read_ident_chars()`.
-			'0'..='9' => Token::Literal(first.into()),
-			_ => bail!("Unrecognised character input (Lexer)!"),
+			other => bail!("Unrecognised character input '{other}'!"),
 		})
+	}
+
+	// FIXME: so much of this is cursed and broken.
+	fn read_num_chars(&mut self) -> Result<String> {
+		let mut buf: String = String::with_capacity(8);
+		let (mut invalid, mut seen_period): (bool, bool) = (true, false);
+		let mut current: char = self.read_char()?;
+		if !current.is_ascii_digit() {
+			bail!("Invalid number start character '{current}'!")
+		};
+		// TODO: '_' support for numbers
+		while current.is_ascii_digit() || current == '.' {
+			buf.push(current);
+			if current == '.' {
+				if seen_period {
+					invalid = true;
+					break;
+				};
+				seen_period = true;
+			};
+			invalid = false;
+			current = self.read_char()?;
+		}
+		if invalid {
+			bail!("Invalid number '{buf}'!");
+		};
+		if seen_period && current != 'f' {
+			expect_char!(self.read_char()?, 'f');
+			buf.push('f');
+		} else if current == 'f' {
+			buf.push(current);
+			let next: char = self.read_char()?;
+			if next.is_ascii_alphanumeric() || next == '.' {
+				bail!("Unexpected trailing character(s) found after float literal '{buf}'!  First trailing was '{next}'!")
+			} else if !next.is_whitespace() {
+				self.cached_chars.push_back(next);
+			};
+		};
+		Ok(buf)
 	}
 
 	fn read_ident_chars(&mut self) -> Result<String> {
@@ -207,19 +248,20 @@ impl<'a> Lexer<'a> {
 	}
 
 	fn peek_char(&mut self) -> Result<char> {
-		let next: char = self.next_substantial_char_impl()?;
+		let next: char = self.next_sig_char_impl()?;
 		self.cached_chars.push_back(next);
 		Ok(next)
 	}
 
-	fn next_substantial_char(&mut self) -> Result<char> {
+	// next significant character
+	fn next_sig_char(&mut self) -> Result<char> {
 		if let Some(cached) = self.cached_chars.pop_back() {
 			return Ok(cached);
 		};
-		self.next_substantial_char_impl()
+		self.next_sig_char_impl()
 	}
 
-	fn next_substantial_char_impl(&mut self) -> Result<char> {
+	fn next_sig_char_impl(&mut self) -> Result<char> {
 		let mut current: char = self.read_char_impl()?;
 		while current.is_whitespace() {
 			current = self.read_char_impl()?;
@@ -233,7 +275,7 @@ impl<'a> Lexer<'a> {
 			.context("An error occurred trying to read bytes (Lexer)!")
 	}
 
-	pub fn read_char(&mut self) -> Result<char> {
+	fn read_char(&mut self) -> Result<char> {
 		if let Some(cached) = self.cached_chars.pop_back() {
 			return Ok(cached);
 		};
