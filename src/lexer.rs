@@ -101,6 +101,23 @@ macro_rules! matches_ahead {
 	};
 }
 
+macro_rules! pop_parsed {
+	($src:expr; $($expected:expr),* $(,)?) => {
+		let Some(restore): Option<char> = $src.pop_back() else {
+			// SAFETY:
+			// Problem(s):
+			// - `unreachable_unchecked()` is unsafe, and it is Undefined Behaviour for it to be reached.
+			// Excuse(s):
+			// - This statement cannot be reached.
+			unsafe {
+				unreachable_unchecked();
+			};
+		};
+		expect_char!($src.pop_back().expect("Unreachable (keyword cleanup)."); $($expected,)*);
+		$src.push_back(restore);
+	};
+}
+
 const fn is_valid_for_identifier(input: char) -> bool {
 	input.is_ascii_alphabetic() || input == '_'
 }
@@ -131,69 +148,77 @@ impl<'a> Lexer<'a> {
 		};
 		let first: char = self.next_substantial_char()?;
 		Ok(match first {
-			// _ if is_valid_for_identifier(first) => {
-			// 	todo!()
-			// },
-			// TODO: handle how identifiers conflict with these keywords
-			'f' => {
-				if matches_ahead!(self.peek_char()?; 'u', 'n', 'c', 't') {
-					if is_valid_for_identifier(self.peek_char()?) {
-						// identifier
-						todo!()
-					};
-					// *
-					let Some(restore): Option<char> = self.cached_chars.pop_back() else {
-						// SAFETY:
-						// Problem(s):
-						// - `unreachable_unchecked()` is unsafe, and it is Undefined Behaviour for it to be reached.
-						// Excuse(s):
-						// - This statement cannot be reached.
-						unsafe {
-							unreachable_unchecked();
-						};
-					};
-					// 't'
-					self.cached_chars.pop_back();
-					// 'c'
-					self.cached_chars.pop_back();
-					// 'n'
-					self.cached_chars.pop_back();
-					// 'u'
-					self.cached_chars.pop_back();
-					self.cached_chars.push_back(restore);
-					Token::Function
-				} else {
-					// identifier
-					todo!()
-				}
-			},
-			'u' => {
-				if matches_ahead!(self.peek_char()?; 'n', 's', 'a', 'f', 'e') {
-					if is_valid_for_identifier(self.peek_char()?) {
-						// identifier
-						todo!()
-					};
-					Token::Unsafe
-				} else {
-					// identifier
-					todo!()
-				}
-			},
-			'e' => {
-				expect_char!(self.read_char()?; 'x', 't', 'e', 'r', 'n');
-				Token::External
-			},
-			'c' => {
-				expect_char!(self.read_char()?; 'o', 'n', 's', 't');
-				Token::Constant
-			},
-			'r' => {
-				expect_char!(self.read_char()?; 'e', 't', 'u', 'r', 'n');
-				Token::Return
-			},
-			'v' => {
-				expect_char!(self.read_char()?; 'a', 'l');
-				Token::Val
+			_ if is_valid_for_identifier(first) => {
+				let option: Option<Token> = match first {
+					'f' => {
+						if matches_ahead!(self.peek_char()?; 'u', 'n', 'c', 't')
+							&& !is_valid_for_identifier(self.peek_char()?)
+						{
+							pop_parsed!(self.cached_chars; 't', 'c', 'n', 'u');
+							Some(Token::Function)
+						} else {
+							None
+						}
+					},
+					'u' => {
+						if matches_ahead!(self.peek_char()?; 'n', 's', 'a', 'f', 'e')
+							&& !is_valid_for_identifier(self.peek_char()?)
+						{
+							pop_parsed!(self.cached_chars; 'e', 'f', 'a', 's', 'n');
+							Some(Token::Unsafe)
+						} else {
+							None
+						}
+					},
+					'e' => {
+						if matches_ahead!(self.peek_char()?; 'x', 't', 'e', 'r', 'n')
+							&& !is_valid_for_identifier(self.peek_char()?)
+						{
+							pop_parsed!(self.cached_chars; 'n', 'r', 'e', 't', 'x');
+							Some(Token::External)
+						} else {
+							None
+						}
+					},
+					'c' => {
+						if matches_ahead!(self.peek_char()?; 'o', 'n', 's', 't')
+							&& !is_valid_for_identifier(self.peek_char()?)
+						{
+							pop_parsed!(self.cached_chars; 't', 's', 'n', 'o');
+							Some(Token::Constant)
+						} else {
+							None
+						}
+					},
+					'r' => {
+						if matches_ahead!(self.peek_char()?; 'e', 't', 'u', 'r', 'n')
+							&& !is_valid_for_identifier(self.peek_char()?)
+						{
+							pop_parsed!(self.cached_chars; 'n', 'r', 'u', 't', 'e');
+							Some(Token::Return)
+						} else {
+							None
+						}
+					},
+					'v' => {
+						if matches_ahead!(self.peek_char()?; 'a', 'l')
+							&& !is_valid_for_identifier(self.peek_char()?)
+						{
+							pop_parsed!(self.cached_chars; 'l', 'a');
+							Some(Token::Val)
+						} else {
+							None
+						}
+					},
+					_ => None,
+				};
+				if let Some(keyword) = option {
+					return Ok(keyword);
+				};
+				// Restore first to stack for cursed purposes.
+				self.cached_chars.push_back(first);
+				dbg!(&self.cached_chars);
+				todo!()
 			},
 			'{' => Token::OpenBrace,
 			'}' => Token::CloseBrace,

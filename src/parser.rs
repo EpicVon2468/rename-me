@@ -225,7 +225,7 @@ impl<'a> Parser<'a> {
 	}
 
 	pub fn parse_function_expr(&mut self) -> Result<Expr> {
-		// FIXME: This conflicts with identifiers.
+		// FIXME: This conflicts with identifiers.  Can't peek ahead multiple times because of lexer limitations.
 		let Token::Identifier(_): Token = *self.lexer.peek_token()? else {
 			return self.parse_primary_expr();
 		};
@@ -304,7 +304,7 @@ impl<'a> Parser<'a> {
 				expect_token!(self.lexer.read_token()?, Token::OpenBrace);
 			},
 			Token::OpenBrace => (),
-			_ => bail!("Unexpected token reached!"),
+			token => bail!("Unexpected token reached!  Token was '{token:?}'!"),
 		};
 		let expr: Expr = Expr::Block(attributes, todo!(), todo!());
 		Ok(expr)
