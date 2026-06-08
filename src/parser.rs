@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::hint::unreachable_unchecked;
+use std::str::FromStr as _;
 
 use anyhow::{Result, bail};
 
@@ -229,7 +230,7 @@ impl<'a> Parser<'a> {
 		let Token::Identifier(_): Token = *self.lexer.peek_token()? else {
 			return self.parse_primary_expr();
 		};
-		// SANITY(unusual): This is cheaper than calling `String::to_owned` to duplicate the reference from peeking.
+		// SANITY(unusual): This is cheaper than calling `<&String>::to_owned` to duplicate the reference from peeking.
 		// SAFETY: The code above this line confirms that the next token will be `Token::Identifier`.
 		let identifier: String = unsafe { self.take_identifier() };
 
@@ -268,9 +269,21 @@ impl<'a> Parser<'a> {
 			Token::Constant | Token::Unsafe | Token::OpenBrace => unsafe {
 				self.parse_block_expr()?
 			},
+			// SANITY(unusual): This is cheaper than calling `<&String>::to_owned` to duplicate the reference from peeking.
 			// SAFETY: This match arm ensures the next token will be `Token::Identifier`.
 			Token::Identifier(_) => Expr::VariableRef(unsafe { self.take_identifier() }),
 			// TODO: literals
+			Token::Literal(ref literal) => {
+				let value: i32 = i32::from_str(literal)?;
+				// Eat 'value'.
+				// SANITY(unchecked):
+				// `Lexer` caches the last peeked token and returns it on next read.
+				// This means that a subsequent call to `Lexer::read_token()` after a call to `Lexer::peek_token()` will always return the same value.
+				// Therefore, it is always safe to assume this is the correct token and leave the return value unchecked.
+				// This includes leaving the `Result` untouched, as no actual I/O operation occurs.
+				let _ = self.lexer.read_token();
+				Expr::IntegerLiteral(value)
+			},
 			_ => todo!(),
 		};
 		Ok(expr)

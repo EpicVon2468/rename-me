@@ -10,7 +10,12 @@ use anyhow::{Context as _, Result, bail};
 #[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Token {
-	/// `IDENTIFIER : '_'* LETTER+ ( '_' | LETTER )* ;`
+	// Can't be only '_', must also consist of at least one letter.
+	/// `IDENTIFIER : IDENTIFIER_START IDENTIFIER_REST* ;`
+	///
+	/// `IDENTIFIER_START : LETTER | '_' ;`
+	///
+	/// `IDENTIFIER_REST : LETTER | NUM | '_' ;`
 	Identifier(String),
 	/// Integer value.
 	///
@@ -90,7 +95,7 @@ macro_rules! expect_char {
 		let actual = $actual;
 		let expected = $expected;
 		if actual != expected {
-			bail!("Unexpected char reached, expected '{expected}', got '{actual}'!");
+			bail!("Unexpected character reached, expected '{expected}', got '{actual}'!");
 		};
 	}};
 }
@@ -101,25 +106,16 @@ macro_rules! matches_ahead {
 	};
 }
 
-macro_rules! pop_parsed {
-	($src:expr; $($expected:expr),* $(,)?) => {
-		let Some(restore): Option<char> = $src.pop_back() else {
-			// SAFETY:
-			// Problem(s):
-			// - `unreachable_unchecked()` is unsafe, and it is Undefined Behaviour for it to be reached.
-			// Excuse(s):
-			// - This statement cannot be reached.
-			unsafe {
-				unreachable_unchecked();
-			};
-		};
-		expect_char!($src.pop_back().expect("Unreachable (keyword cleanup)."); $($expected,)*);
-		$src.push_back(restore);
-	};
+#[allow(clippy::inline_always)]
+#[inline(always)]
+const fn is_valid_for_identifier_first(input: char) -> bool {
+	input.is_ascii_alphabetic() || input == '_'
 }
 
-const fn is_valid_for_identifier(input: char) -> bool {
-	input.is_ascii_alphabetic() || input == '_'
+#[allow(clippy::inline_always)]
+#[inline(always)]
+const fn is_valid_for_identifier_rest(input: char) -> bool {
+	input.is_ascii_alphanumeric() || input == '_'
 }
 
 impl<'a> Lexer<'a> {
@@ -148,77 +144,18 @@ impl<'a> Lexer<'a> {
 		};
 		let first: char = self.next_substantial_char()?;
 		Ok(match first {
-			_ if is_valid_for_identifier(first) => {
-				let option: Option<Token> = match first {
-					'f' => {
-						if matches_ahead!(self.peek_char()?; 'u', 'n', 'c', 't')
-							&& !is_valid_for_identifier(self.peek_char()?)
-						{
-							pop_parsed!(self.cached_chars; 't', 'c', 'n', 'u');
-							Some(Token::Function)
-						} else {
-							None
-						}
-					},
-					'u' => {
-						if matches_ahead!(self.peek_char()?; 'n', 's', 'a', 'f', 'e')
-							&& !is_valid_for_identifier(self.peek_char()?)
-						{
-							pop_parsed!(self.cached_chars; 'e', 'f', 'a', 's', 'n');
-							Some(Token::Unsafe)
-						} else {
-							None
-						}
-					},
-					'e' => {
-						if matches_ahead!(self.peek_char()?; 'x', 't', 'e', 'r', 'n')
-							&& !is_valid_for_identifier(self.peek_char()?)
-						{
-							pop_parsed!(self.cached_chars; 'n', 'r', 'e', 't', 'x');
-							Some(Token::External)
-						} else {
-							None
-						}
-					},
-					'c' => {
-						if matches_ahead!(self.peek_char()?; 'o', 'n', 's', 't')
-							&& !is_valid_for_identifier(self.peek_char()?)
-						{
-							pop_parsed!(self.cached_chars; 't', 's', 'n', 'o');
-							Some(Token::Constant)
-						} else {
-							None
-						}
-					},
-					'r' => {
-						if matches_ahead!(self.peek_char()?; 'e', 't', 'u', 'r', 'n')
-							&& !is_valid_for_identifier(self.peek_char()?)
-						{
-							pop_parsed!(self.cached_chars; 'n', 'r', 'u', 't', 'e');
-							Some(Token::Return)
-						} else {
-							None
-						}
-					},
-					'v' => {
-						if matches_ahead!(self.peek_char()?; 'a', 'l')
-							&& !is_valid_for_identifier(self.peek_char()?)
-						{
-							pop_parsed!(self.cached_chars; 'l', 'a');
-							Some(Token::Val)
-						} else {
-							None
-						}
-					},
-					_ => None,
-				};
-				if let Some(keyword) = option {
-					return Ok(keyword);
-				};
-				// Restore first to stack for cursed purposes.
+			_ if is_valid_for_identifier_first(first) => {
+				// Restore first to stack so `Self::read_ident_chars()` will eat it.
 				self.cached_chars.push_back(first);
-				dbg!(&self.cached_chars);
-				todo!()
+				match self.read_ident_chars()?.as_str() {
+					"funct" => Token::Function,
+					"unsafe" => Token::Unsafe,
+					"extern" => Token::External,
+					"const" => Token::Constant,
+					"return" => Token::Return,
+					"val" => Token::Val,
+					identifier => Token::Identifier(identifier.to_owned()),
+				}
 			},
 			'{' => Token::OpenBrace,
 			'}' => Token::CloseBrace,
@@ -236,10 +173,37 @@ impl<'a> Lexer<'a> {
 			',' => Token::Comma,
 			'=' => Token::Equals,
 			'!' => Token::ExclamationMark,
-			// quick stub
-			'0'..='9' => Token::Literal("1".into()),
-			_ => bail!("Unrecognised char input (Lexer)!"),
+			// FIXME: Implement similar lexing function to `Self::read_ident_chars()`.
+			'0'..='9' => Token::Literal(first.into()),
+			_ => bail!("Unrecognised character input (Lexer)!"),
 		})
+	}
+
+	fn read_ident_chars(&mut self) -> Result<String> {
+		let mut buf: String = String::with_capacity(16);
+		let mut invalid: bool = true;
+		let mut current: char = self.read_char()?;
+		if !is_valid_for_identifier_first(current) {
+			bail!("Invalid identifier start character '{current}'!");
+		};
+		while is_valid_for_identifier_rest(current) {
+			// SANITY(unusual + verbosity):
+			// This expression short-circuits to prevent checking `current` if `invalid` is already false.
+			if invalid && current.is_ascii_alphabetic() {
+				// There needs to be at least one alphabetic character in an identifier.
+				invalid = false;
+			};
+			buf.push(current);
+			current = self.read_char()?;
+		}
+		// SANITY(unchecked):
+		// No check is performed to determine whether `buf` is empty.
+		// The `invalid` variable is true by default, the only way for it to be false is for an alphabetic character to be appended to `buf`.
+		// If `buf` is empty, then no characters were appended, so `invalid` is true.
+		if invalid {
+			bail!("Invalid identifier '{buf}'!")
+		};
+		Ok(buf)
 	}
 
 	fn peek_char(&mut self) -> Result<char> {
@@ -290,7 +254,7 @@ impl<'a> Lexer<'a> {
 				// Aside from malicious or invalid input, it isn't expected for any of these chars to appear.
 				// A fair few of them are ancient ASCII sequences which most people will never run into in their entire lives.
 				cold_path();
-				bail!("Disallowed ASCII char appeared!  Char (in decimal): '{initial}'.");
+				bail!("Disallowed ASCII character appeared!  Character (in decimal): '{initial}'.");
 			};
 			// SANITY(fast-path): All ASCII chars are single-byte.
 			return Ok(char::from(initial));
