@@ -241,6 +241,10 @@ impl<'a> Lexer<'a> {
 			buf.push(current);
 			current = self.read_char()?;
 		}
+		// Push back significant chars because of accidental greedy consumption.
+		if !current.is_whitespace() {
+			self.cached_chars.push_back(current);
+		};
 		// SANITY(unchecked):
 		// No check is performed to determine whether `buf` is empty.
 		// The `invalid` variable is true by default, the only way for it to be false is for an alphabetic character to be appended to `buf`.

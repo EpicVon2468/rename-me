@@ -1,6 +1,6 @@
 use std::collections::HashMap;
+use std::error::Error;
 use std::hint::unreachable_unchecked;
-use std::str::FromStr as _;
 
 use anyhow::{Context as _, Result, bail};
 
@@ -41,9 +41,8 @@ pub struct FunctionDeclaration {
 /// `stmt : variableStmt | assignmentStmt | unitStmt ;`
 #[derive(Debug)]
 pub enum Stmt {
-	// TODO: Option<Expr> for uninitialised variables?
-	/// `variableStmt : VAL assignmentStmt ;`
-	Variable(String, Expr),
+	/// `variableStmt : VAL ( assignmentStmt | IDENTIFIER ) ;`
+	Variable(String, Option<Expr>),
 	/// `assignmentStmt : IDENTIFIER EQUALS unitStmt ;`
 	Assignment(String, Expr),
 	/// `unitStmt : expr SEMICOLON ;`
@@ -67,7 +66,7 @@ pub enum Expr {
 	VariableRef(String),
 	/// `blockExpr : ( CONSTANT? UNSAFE? )? OPEN_BRACE stmt* expr CLOSE_BRACE ;`
 	Block(Attributes, Vec<Stmt>, Box<Self>),
-	IntegerLiteral(i128),
+	IntegerLiteral(u128),
 	FloatLiteral(f64),
 }
 
@@ -127,7 +126,9 @@ macro_rules! handle_erroneous {
 				| Token::ExclamationMark
 		) {
 			let erroneous: Token = $lexer.read_token().expect("Cached.");
-			bail!("Ran into erroneous token whilst parsing termExpr.  Token was: {erroneous:?}!");
+			bail!(UnexpectedTokenError {
+				unexpected: erroneous
+			});
 		};
 	}};
 }
@@ -253,7 +254,6 @@ impl<'a> Parser<'a> {
 		let identifier: String = unsafe { self.take_identifier() };
 
 		// Eat '('.
-		// SANITY(unexpected): The next token should always be '('.
 		expect_token!(self.lexer.read_token()?, Token::OpenBracket);
 
 		// SANITY(fast-path): No need to allocate a proper `Vec` or loop if there are no parameters.
@@ -278,15 +278,12 @@ impl<'a> Parser<'a> {
 
 	pub fn parse_primary_expr(&mut self) -> Result<Expr> {
 		let expr: Expr = match *self.lexer.peek_token()? {
-			// SAFETY: This match arm ensures the next token is valid for a `blockExpr`.
-			Token::Constant | Token::Unsafe | Token::OpenBrace => unsafe {
-				self.parse_block_expr()?
-			},
+			Token::Constant | Token::Unsafe | Token::OpenBrace => self.parse_block_expr()?,
 			Token::OpenBracket => {
 				// Eat '('.
 				let _ = self.lexer.read_token();
 				let result: Expr = self.parse_expr()?;
-				// SANITY(unexpected): The next token should always be ')'.
+				// Eat ')'.
 				expect_token!(self.lexer.read_token()?, Token::CloseBracket);
 				result
 			},
@@ -294,8 +291,7 @@ impl<'a> Parser<'a> {
 			// SAFETY: This match arm ensures the next token will be `Token::Identifier`.
 			Token::Identifier(_) => Expr::VariableRef(unsafe { self.take_identifier() }),
 			Token::Literal(ref literal) => {
-				let value: i128 =
-					i128::from_str(literal).context("Couldn't parse integer literal.")?;
+				let value: u128 = literal.parse().context("Couldn't parse integer literal.")?;
 				// Eat `value`.
 				let _ = self.lexer.read_token();
 				Expr::IntegerLiteral(value)
@@ -303,8 +299,9 @@ impl<'a> Parser<'a> {
 			Token::Real(ref real) => {
 				// Trim 'f' suffix so f64 can parse it.
 				let trimmed: &str = &real[0..(real.len() - 1)];
-				let value: f64 =
-					f64::from_str(trimmed).context("Couldn't parse floating-point literal.")?;
+				let value: f64 = trimmed
+					.parse()
+					.context("Couldn't parse floating-point literal.")?;
 				// Eat `value`.
 				let _ = self.lexer.read_token();
 				Expr::FloatLiteral(value)
@@ -314,37 +311,132 @@ impl<'a> Parser<'a> {
 		Ok(expr)
 	}
 
-	/// # Safety
-	///
-	/// Unlike the other parsing [`Expr`] parsing methods defined in [`Self`], this method _does not_ hand off parsing down to any other kind of expression on failure to match the correct initial token(s).
-	///
-	/// Callers must, _at minimum_ ensure that the next token is valid for a `blockExpr`.
-	pub unsafe fn parse_block_expr(&mut self) -> Result<Expr> {
+	pub fn parse_block_expr(&mut self) -> Result<Expr> {
 		let mut attributes: Attributes = 0;
 		match self.lexer.read_token()? {
 			Token::Constant => {
 				attributes |= ATTR_CONSTANT;
 				if self.lexer.peek_token()? == &Token::Unsafe {
-					// SANITY(unchecked):
-					// `Lexer` caches the last peeked token and returns it on next read.
-					// This means that a subsequent call to `Lexer::read_token()` after a call to `Lexer::peek_token()` will always return the same value.
-					// Therefore, it is always safe to assume this is the correct token and leave the return value unchecked.
-					// This includes leaving the `Result` untouched, as no actual I/O operation occurs.
+					// Eat 'unsafe'.
 					let _ = self.lexer.read_token();
 					attributes |= ATTR_UNSAFE;
 				};
-				// SANITY(unexpected): The next token should always be '{'.
+				// Eat '{'.
 				expect_token!(self.lexer.read_token()?, Token::OpenBrace);
 			},
 			Token::Unsafe => {
 				attributes |= ATTR_UNSAFE;
-				// SANITY(unexpected): The next token should always be '{'.
+				// Eat '{'.
 				expect_token!(self.lexer.read_token()?, Token::OpenBrace);
 			},
 			Token::OpenBrace => (),
-			token => bail!("Unexpected token reached!  Token was '{token:?}'!"),
+			unexpected => bail!(UnexpectedTokenError { unexpected }),
 		};
+		let mut result: Vec<Stmt> = Vec::with_capacity(4);
 		let expr: Expr = Expr::Block(attributes, todo!(), todo!());
 		Ok(expr)
 	}
+
+	pub fn parse_stmt(&mut self) -> Result<Stmt> {
+		let stmt: Stmt = match *self.lexer.peek_token()? {
+			Token::Val => self.parse_variable_stmt()?,
+			Token::Identifier(_) => self.parse_assignment_stmt()?,
+			_ => self.parse_unit_stmt()?,
+		};
+		Ok(stmt)
+	}
+
+	fn peek_identifier_or_bail(&mut self) -> Result<()> {
+		let Token::Identifier(_): Token = *self.lexer.peek_token()? else {
+			bail!(UnexpectedTokenError {
+				unexpected: self
+					.lexer
+					.read_token()
+					.expect("Unreachable panic, this read is cached."),
+			});
+		};
+		Ok(())
+	}
+
+	pub fn parse_variable_stmt(&mut self) -> Result<Stmt> {
+		let Token::Val: Token = *self.lexer.peek_token()? else {
+			bail!(UnexpectedTokenError {
+				unexpected: self
+					.lexer
+					.read_token()
+					.expect("Unreachable panic, this read is cached."),
+			});
+		};
+		// Eat 'val'.
+		let _ = self.lexer.read_token();
+		self.peek_identifier_or_bail()?;
+		let identifier: String;
+		let assignment: Option<Expr> = if self.lexer.peek_token()? == &Token::Semicolon {
+			// SANITY(unusual): This is cheaper than calling `<&String>::to_owned` to duplicate the reference from peeking.
+			// SAFETY: The above check ensures the next token will be `Token::Identifier`.
+			identifier = unsafe { self.take_identifier() };
+			None
+		} else {
+			let Stmt::Assignment(ident, expr): Stmt = self.parse_assignment_stmt()? else {
+				// SANITY(unreachable): The matched function always returns `Stmt::Assignment`.
+				// SAFETY:
+				// Problem(s):
+				// - `unreachable_unchecked()` is unsafe, and it is Undefined Behaviour for it to be reached.
+				// Excuse(s):
+				// - This statement cannot be reached.
+				unsafe {
+					unreachable_unchecked();
+				};
+			};
+			identifier = ident;
+			Some(expr)
+		};
+		Ok(Stmt::Variable(identifier, assignment))
+	}
+
+	pub fn parse_assignment_stmt(&mut self) -> Result<Stmt> {
+		self.peek_identifier_or_bail()?;
+		// SANITY(unusual): This is cheaper than calling `<&String>::to_owned` to duplicate the reference from peeking.
+		// SAFETY: The above check ensures the next token will be `Token::Identifier`.
+		let identifier: String = unsafe { self.take_identifier() };
+		// Eat '='.
+		expect_token!(self.lexer.read_token()?, Token::Equals);
+		let Stmt::Unit(expr): Stmt = self.parse_unit_stmt()? else {
+			// SANITY(unreachable): The matched function always returns `Stmt::Unit`.
+			// SAFETY:
+			// Problem(s):
+			// - `unreachable_unchecked()` is unsafe, and it is Undefined Behaviour for it to be reached.
+			// Excuse(s):
+			// - This statement cannot be reached.
+			unsafe {
+				unreachable_unchecked();
+			};
+		};
+		Ok(Stmt::Assignment(identifier, expr))
+	}
+
+	pub fn parse_unit_stmt(&mut self) -> Result<Stmt> {
+		let expr: Expr = self.parse_expr()?;
+		// Eat ';'.
+		expect_token!(self.lexer.read_token()?, Token::Semicolon);
+		Ok(Stmt::Unit(expr))
+	}
 }
+
+#[derive(Debug)]
+pub struct UnexpectedTokenError {
+	// TODO: `expected: Option<Token>,`
+	unexpected: Token,
+}
+
+impl std::fmt::Display for UnexpectedTokenError {
+	fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
+		write!(
+			fmt,
+			"Unexpected token reached!  Actual token was {:?}!",
+			self.unexpected,
+		)
+	}
+}
+
+impl Error for UnexpectedTokenError {}
