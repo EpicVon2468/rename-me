@@ -61,12 +61,13 @@ pub mod parser;
 
 use anyhow::Result;
 
-use inkwell::support::{enable_llvm_pretty_stack_trace, get_llvm_version};
+use inkwell::support::{enable_llvm_pretty_stack_trace, get_llvm_version, shutdown_llvm};
 
 use crate::codegen::CodeGen;
 use crate::parser::Parser;
 
 pub fn main() -> Result<()> {
+	// FIXME: can't remove the trailing '}' without fixing `Parser::parse_factor_expr()`.
 	let mut input: &[u8] = b"1 + 42.0f * 2 }";
 	let mut parser: Parser = Parser::from(&mut input);
 	parser.parse()?;
@@ -75,5 +76,7 @@ pub fn main() -> Result<()> {
 	println!("Loading with LLVM version {major}.{minor}.{patch}...");
 	let codegen: CodeGen = CodeGen::new("test");
 	codegen.debug();
+	// SAFETY:
+	unsafe { shutdown_llvm() };
 	Ok(())
 }

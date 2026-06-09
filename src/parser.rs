@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::error::Error;
+use std::fmt::{Display, Formatter};
 use std::hint::unreachable_unchecked;
 
 use anyhow::{Context as _, Result, bail};
@@ -429,8 +430,8 @@ pub struct UnexpectedTokenError {
 	unexpected: Token,
 }
 
-impl std::fmt::Display for UnexpectedTokenError {
-	fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
+impl Display for UnexpectedTokenError {
+	fn fmt(&self, fmt: &mut Formatter<'_>) -> std::fmt::Result {
 		write!(
 			fmt,
 			"Unexpected token reached!  Actual token was {:?}!",

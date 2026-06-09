@@ -1,8 +1,11 @@
 use std::collections::VecDeque;
+use std::error::Error;
+use std::fmt::{Display, Formatter};
 use std::hint::{cold_path, unreachable_unchecked};
-use std::io::BufRead;
+use std::io::{Error as IOError, Read};
+use std::str::Utf8Error;
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Result, anyhow, bail};
 
 /// `LETTER : [a-zA-Z]`
 ///
@@ -79,7 +82,7 @@ pub enum Token {
 	ExclamationMark,
 }
 
-pub type Src<'a> = &'a mut dyn BufRead;
+pub type Src<'a> = &'a mut dyn Read;
 
 pub struct Lexer<'a> {
 	src: Src<'a>,
@@ -280,7 +283,7 @@ impl<'a> Lexer<'a> {
 	fn read(&mut self, buf: &mut [u8]) -> Result<()> {
 		self.src
 			.read_exact(buf)
-			.context("An error occurred trying to read bytes (Lexer)!")
+			.map_err(|error: IOError| anyhow!(ReadError::ForwardedIOError(error)))
 	}
 
 	fn read_char(&mut self) -> Result<char> {
@@ -304,7 +307,7 @@ impl<'a> Lexer<'a> {
 				// Aside from malicious or invalid input, it isn't expected for any of these chars to appear.
 				// A fair few of them are ancient ASCII sequences which most people will never run into in their entire lives.
 				cold_path();
-				bail!("Disallowed ASCII character appeared!  Character (in decimal): '{initial}'.");
+				bail!(ReadError::DisallowedASCIIChar(initial));
 			};
 			// SANITY(fast-path): All ASCII chars are single-byte.
 			return Ok(char::from(initial));
@@ -330,7 +333,7 @@ impl<'a> Lexer<'a> {
 			// SANITY(unusual): Cheaper to store 128 `u8`s and convert at use-site than to store 128 `usize`s.
 			let len: usize = UTF8_CHAR_WIDTH[index] as usize;
 			if len == 0 {
-				bail!("Invalid UTF-8 byte (length of 0)!");
+				bail!(ReadError::ZeroLengthByte(initial));
 			};
 			len
 		};
@@ -340,7 +343,10 @@ impl<'a> Lexer<'a> {
 		self.read(&mut buf[1..])?;
 
 		// SANITY(unusual): There doesn't appear to be any other way to make a `char` from a `u8` slice than this.
-		let string: &str = str::from_utf8(&buf).context("Invalid UTF-8 byte sequence!")?;
+		let string: &str = match str::from_utf8(&buf) {
+			Ok(result) => result,
+			Err(error) => bail!(ReadError::InvalidByteSequence(Some(error), buf)),
+		};
 		let Some(result): Option<char> = string.chars().next() else {
 			// SANITY(unreachable): If `len` was 0, the enclosing function would've `bail!()`'d before this point.
 			// SAFETY:
@@ -353,6 +359,49 @@ impl<'a> Lexer<'a> {
 			};
 		};
 		Ok(result)
+	}
+}
+
+#[derive(Debug)]
+pub enum ReadError {
+	ForwardedIOError(IOError),
+	DisallowedASCIIChar(u8),
+	ZeroLengthByte(u8),
+	InvalidByteSequence(Option<Utf8Error>, Vec<u8>),
+}
+
+impl Display for ReadError {
+	fn fmt(&self, destination: &mut Formatter<'_>) -> std::fmt::Result {
+		match *self {
+			Self::ForwardedIOError(_) => write!(
+				destination,
+				"An I/O error occurred whilst trying to read bytes from source!",
+			),
+			Self::DisallowedASCIIChar(ref char) => write!(
+				destination,
+				"Disallowed ASCII character appeared!  Character (in decimal) was: '{char}'!",
+			),
+			Self::ZeroLengthByte(ref byte) => write!(
+				destination,
+				"Invalid UTF-8 byte with length of 0 appeared!  Byte (in decimal) was: '{byte}'!",
+			),
+			Self::InvalidByteSequence(_, ref sequence) => write!(
+				destination,
+				"Invalid UTF-8 byte sequence!  Sequence (in decimal(s)) was '{sequence:?}'!",
+			),
+		}
+	}
+}
+
+impl Error for ReadError {
+	fn source(&self) -> Option<&(dyn Error + 'static)> {
+		match *self {
+			Self::ForwardedIOError(ref source) => Some(source),
+			Self::InvalidByteSequence(ref source, _) => source
+				.as_ref()
+				.map::<&(dyn Error + 'static), _>(|error: &Utf8Error| error),
+			_ => None,
+		}
 	}
 }
 
