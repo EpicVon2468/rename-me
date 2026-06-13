@@ -54,10 +54,12 @@
 	reason = "Shush"
 )]
 #![allow(clippy::borrowed_box)]
+#![feature(derive_const, const_cmp, const_trait_impl, likely_unlikely)]
 #![doc = include_str!("../README.md")]
 pub mod codegen;
 pub mod lexer;
 pub mod parser;
+pub mod types;
 
 use anyhow::Result;
 
@@ -67,16 +69,25 @@ use crate::codegen::CodeGen;
 use crate::parser::Parser;
 
 pub fn main() -> Result<()> {
-	// FIXME: can't remove the trailing '}' without fixing `Parser::parse_factor_expr()`.
-	let mut input: &[u8] = b"1 + 42.0f * 2 }";
-	let mut parser: Parser = Parser::from(&mut input);
-	parser.parse()?;
-	enable_llvm_pretty_stack_trace();
-	let (major, minor, patch): (u32, u32, u32) = get_llvm_version();
-	println!("Loading with LLVM version {major}.{minor}.{patch}...");
-	let codegen: CodeGen = CodeGen::new("test");
-	codegen.debug();
+	{
+		let mut input: &[u8] = b"1 + 42.0f * 2;";
+		let mut parser: Parser = Parser::from(&mut input);
+		parser.parse()?;
+		{
+			enable_llvm_pretty_stack_trace();
+			let (major, minor, patch): (u32, u32, u32) = get_llvm_version();
+			println!("Loading with LLVM version {major}.{minor}.{patch}...");
+		};
+		let codegen: CodeGen = CodeGen::new("test");
+		codegen.debug();
+	};
 	// SAFETY:
-	unsafe { shutdown_llvm() };
+	// Problem(s):
+	// - LLVM data after this a call to `shutdown_llvm()` is likely to segfault.
+	// Excuse(s):
+	// - All references to LLVM data are dropped before this point.
+	unsafe {
+		shutdown_llvm();
+	};
 	Ok(())
 }

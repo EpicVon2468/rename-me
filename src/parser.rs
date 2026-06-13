@@ -1,11 +1,26 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::hint::unreachable_unchecked;
+use std::hint::{cold_path, unreachable_unchecked};
 
 use anyhow::{Context as _, Result, bail};
 
 use crate::lexer::{Lexer, Src, Token};
+use crate::types::floats::{
+	__16BitBrainFloatingPoint,
+	__16BitFloatingPoint,
+	__32BitFloatingPoint,
+	__64BitFloatingPoint,
+	__128BitFloatingPoint,
+};
+use crate::types::integers::{
+	__8BitInteger,
+	__16BitInteger,
+	__32BitInteger,
+	__64BitInteger,
+	__128BitInteger,
+};
+use crate::types::{__Boolean, __Type};
 
 pub mod attrs {
 	pub type Attributes = u8;
@@ -27,6 +42,9 @@ pub mod attrs {
 
 	pub const ATTR_EXTERNAL: Attributes = 0b0100;
 	attr_checker!(is_external, ATTR_EXTERNAL);
+
+	pub const ATTR_PRIVATE: Attributes = 0b1000;
+	attr_checker!(is_private, ATTR_PRIVATE);
 }
 
 use attrs::{ATTR_CONSTANT, ATTR_UNSAFE, Attributes};
@@ -65,9 +83,10 @@ pub enum Expr {
 	/// `functionCallExpr : IDENTIFIER OPEN_BRACKET ( expr ( COMMA expr )* )? CLOSE_BRACKET ;`
 	FunctionCall(String, Vec<Self>),
 	VariableRef(String),
-	/// `blockExpr : ( CONSTANT? UNSAFE? )? OPEN_BRACE stmt* expr CLOSE_BRACE ;`
+	/// `blockExpr : ( CONSTANT? UNSAFE? )? OPEN_CURLY stmt* expr CLOSE_CURLY ;`
 	Block(Attributes, Vec<Stmt>, Box<Self>),
 	IntegerLiteral(u128),
+	// FIXME: Use f128 once RustRover supports it (LLVM has explicit support for it).
 	FloatLiteral(f64),
 }
 
@@ -87,9 +106,8 @@ pub enum Unary {
 	Minus,
 	/// `!`
 	Negate,
-	// FIXME: This will cause problems since it follows right after `factorExpr`.
-	//// `*`
-	// Ptr,
+	/// `*`
+	Ptr,
 	/// `&`
 	Ref,
 }
@@ -120,7 +138,7 @@ macro_rules! handle_erroneous {
 				| Token::External
 				| Token::Constant
 				| Token::Return
-				| Token::Val | Token::OpenBrace
+				| Token::Val | Token::OpenCurlyBracket
 				| Token::OpenBracket
 				| Token::OpenSquareBracket
 				| Token::Colon
@@ -132,6 +150,40 @@ macro_rules! handle_erroneous {
 			});
 		};
 	}};
+}
+
+impl Parser<'_> {
+	#[must_use]
+	pub fn type_by_name(&self, identifier: &str) -> Box<dyn __Type> {
+		#[expect(clippy::panic)]
+		if identifier.is_empty() || !identifier.is_ascii() {
+			// SANITY(unexpected):
+			// Given internal parser & lexer validation, this branch should be near-impossible to reach.
+			cold_path();
+			panic!("Identifiers must be non-empty and consist only of ASCII characters!");
+		};
+		macro_rules! bx {
+			($ty:expr) => {
+				Box::new($ty)
+			};
+		}
+		// SANITY(ptr) + SAFETY: `identifier` is a non-empty ASCII string slice.
+		let integer_is_unsigned: bool = unsafe { *identifier.as_ptr() } == b'u';
+		match identifier {
+			"bool" => bx!(__Boolean::instance()),
+			"u8" | "i8" => bx!(__8BitInteger::new(integer_is_unsigned)),
+			"u16" | "i16" => bx!(__16BitInteger::new(integer_is_unsigned)),
+			"u32" | "i32" => bx!(__32BitInteger::new(integer_is_unsigned)),
+			"u64" | "i64" => bx!(__64BitInteger::new(integer_is_unsigned)),
+			"u128" | "i128" => bx!(__128BitInteger::new(integer_is_unsigned)),
+			"f16" => bx!(__16BitFloatingPoint::instance()),
+			"b16" => bx!(__16BitBrainFloatingPoint::instance()),
+			"f32" => bx!(__32BitFloatingPoint::instance()),
+			"f64" => bx!(__64BitFloatingPoint::instance()),
+			"f128" => bx!(__128BitFloatingPoint::instance()),
+			_ => todo!("Custom type lookup"),
+		}
+	}
 }
 
 impl<'a> Parser<'a> {
@@ -171,8 +223,8 @@ impl<'a> Parser<'a> {
 			let _ = self.lexer.read_token();
 			let rhs: Expr = self.parse_factor_expr()?;
 			result = match op {
-				Term::Add => Expr::Add(result.into(), rhs.into()),
-				Term::Sub => Expr::Sub(result.into(), rhs.into()),
+				Term::Add => Expr::Add(Box::new(result), Box::new(rhs)),
+				Term::Sub => Expr::Sub(Box::new(result), Box::new(rhs)),
 			};
 		}
 		Ok(result)
@@ -194,8 +246,8 @@ impl<'a> Parser<'a> {
 			let _ = self.lexer.read_token();
 			let rhs: Expr = self.parse_unary_expr()?;
 			result = match op {
-				Factor::Mul => Expr::Mul(result.into(), rhs.into()),
-				Factor::Div => Expr::Div(result.into(), rhs.into()),
+				Factor::Mul => Expr::Mul(Box::new(result), Box::new(rhs)),
+				Factor::Div => Expr::Div(Box::new(result), Box::new(rhs)),
 			};
 		}
 		Ok(result)
@@ -203,15 +255,16 @@ impl<'a> Parser<'a> {
 
 	pub fn parse_unary_expr(&mut self) -> Result<Expr> {
 		let op: Option<Unary> = match *self.lexer.peek_token()? {
-			Token::Minus => Unary::Minus.into(),
-			Token::ExclamationMark => Unary::Negate.into(),
-			Token::Ampersand => Unary::Ref.into(),
+			Token::Minus => Some(Unary::Minus),
+			Token::ExclamationMark => Some(Unary::Negate),
+			Token::Asterisk => Some(Unary::Ptr),
+			Token::Ampersand => Some(Unary::Ref),
 			_ => None,
 		};
 		let result: Expr = if let Some(unary) = op {
 			// Eat `op`.
 			let _ = self.lexer.read_token();
-			Expr::Unary(unary, self.parse_function_expr()?.into())
+			Expr::Unary(unary, Box::new(self.parse_function_expr()?))
 		} else {
 			self.parse_function_expr()?
 		};
@@ -271,7 +324,7 @@ impl<'a> Parser<'a> {
 			if token == Token::CloseBracket {
 				break;
 			} else if token != Token::Comma {
-				bail!("Expected closing bracket or a comma, but instead found '{token:?}'!")
+				bail!("Expected closing bracket or a comma, but instead found '{token:?}'!");
 			};
 		}
 		Ok(Expr::FunctionCall(identifier, parameters))
@@ -279,7 +332,7 @@ impl<'a> Parser<'a> {
 
 	pub fn parse_primary_expr(&mut self) -> Result<Expr> {
 		let expr: Expr = match *self.lexer.peek_token()? {
-			Token::Constant | Token::Unsafe | Token::OpenBrace => self.parse_block_expr()?,
+			Token::Constant | Token::Unsafe | Token::OpenCurlyBracket => self.parse_block_expr()?,
 			Token::OpenBracket => {
 				// Eat '('.
 				let _ = self.lexer.read_token();
@@ -323,14 +376,14 @@ impl<'a> Parser<'a> {
 					attributes |= ATTR_UNSAFE;
 				};
 				// Eat '{'.
-				expect_token!(self.lexer.read_token()?, Token::OpenBrace);
+				expect_token!(self.lexer.read_token()?, Token::OpenCurlyBracket);
 			},
 			Token::Unsafe => {
 				attributes |= ATTR_UNSAFE;
 				// Eat '{'.
-				expect_token!(self.lexer.read_token()?, Token::OpenBrace);
+				expect_token!(self.lexer.read_token()?, Token::OpenCurlyBracket);
 			},
-			Token::OpenBrace => (),
+			Token::OpenCurlyBracket => (),
 			unexpected => bail!(UnexpectedTokenError { unexpected }),
 		};
 		let mut result: Vec<Stmt> = Vec::with_capacity(4);

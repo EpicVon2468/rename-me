@@ -2,7 +2,10 @@ use std::mem::ManuallyDrop;
 
 use inkwell::builder::Builder;
 use inkwell::context::Context;
-use inkwell::module::Module;
+use inkwell::module::{Linkage, Module};
+
+use crate::parser::FunctionDeclaration;
+use crate::parser::attrs::{Attributes, is_external, is_private};
 
 #[derive(Debug)]
 pub struct CodeGen<'a> {
@@ -31,6 +34,23 @@ impl CodeGen<'_> {
 			module,
 			builder,
 		}
+	}
+
+	pub fn create_function(&mut self, function: &FunctionDeclaration) {
+		let linkage: Option<Linkage> = {
+			let attrs: Attributes = function.attributes;
+			if is_external(attrs) {
+				Some(Linkage::External)
+			} else if is_private(attrs) {
+				Some(Linkage::Private)
+			} else {
+				None
+			}
+		};
+
+		self.module
+			.add_function(&function.identifier, todo!(), linkage);
+		// self.module.add_function();
 	}
 
 	pub fn debug(&self) {

@@ -40,10 +40,30 @@ pub enum Token {
 	Return,
 	/// `VAL : 'v' 'a' 'l' ;`
 	Val,
-	/// `OPEN_BRACE : '{' ;`
-	OpenBrace,
-	/// `CLOSE_BRACE : '}' ;`
-	CloseBrace,
+	/// [`llvm.cold`](https://llvm.org/docs/LangRef.html#function-attributes:~:text=cold,-This)
+	///
+	/// `COLD : 'l' 'l' 'v' 'm' '-' 'c' 'o' 'l' 'd' ;`
+	Cold,
+	/// [`llvm.hot`](https://llvm.org/docs/LangRef.html#function-attributes:~:text=hot,-This)
+	///
+	/// `HOT : 'l' 'l' 'v' 'm' '-' 'h' 'o' 't' ;`
+	Hot,
+	/// [`llvm.strictfp`](https://llvm.org/docs/LangRef.html#function-attributes:~:text=strictfp)
+	///
+	/// `STRICT_FP : 's' 't' 'r' 'i' 'c' 't' '-' 'f' 'p' ;`
+	StrictFloatingPoint,
+	/// [`llvm.inlinehint`](https://llvm.org/docs/LangRef.html#function-attributes:~:text=inlinehint)
+	///
+	/// `TRY_INLINE : 't' 'r' 'y' '-' 'i' 'n' 'l' 'i' 'n' 'e' ;`
+	TryInline,
+	/// [`llvm.alwaysinline`](https://llvm.org/docs/LangRef.html#function-attributes:~:text=alwaysinline,-This)
+	///
+	/// `FORCE_INLINE : 'f' 'o' 'r' 'c' 'e' '-' 'i' 'n' 'l' 'i' 'n' 'e' ;`
+	ForceInline,
+	/// `OPEN_CURLY : '{' ;`
+	OpenCurlyBracket,
+	/// `CLOSE_CURLY : '}' ;`
+	CloseCurlyBracket,
 	/// `OPEN_BRACKET : '(' ;`
 	OpenBracket,
 	/// `CLOSE_BRACKET : ')' ;`
@@ -112,7 +132,7 @@ const fn is_valid_for_identifier_first(input: char) -> bool {
 #[allow(clippy::inline_always)]
 #[inline(always)]
 const fn is_valid_for_identifier_rest(input: char) -> bool {
-	input.is_ascii_alphanumeric() || input == '_'
+	input.is_ascii_alphanumeric() || input == '_' || input == '-'
 }
 
 impl<'a> Lexer<'a> {
@@ -151,7 +171,17 @@ impl<'a> Lexer<'a> {
 					"const" => Token::Constant,
 					"return" => Token::Return,
 					"val" => Token::Val,
-					identifier => Token::Identifier(identifier.to_owned()),
+					"llvm-cold" => Token::Cold,
+					"llvm-hot" => Token::Hot,
+					"strict-fp" => Token::StrictFloatingPoint,
+					"try-inline" => Token::TryInline,
+					"force-inline" => Token::ForceInline,
+					identifier => {
+						if identifier.contains('-') {
+							bail!("Illegal identifier '{identifier}'!  Contained a '-'!");
+						};
+						Token::Identifier(identifier.to_owned())
+					},
 				}
 			},
 			'0'..='9' => {
@@ -164,8 +194,8 @@ impl<'a> Lexer<'a> {
 					Token::Literal(value)
 				}
 			},
-			'{' => Token::OpenBrace,
-			'}' => Token::CloseBrace,
+			'{' => Token::OpenCurlyBracket,
+			'}' => Token::CloseCurlyBracket,
 			'(' => Token::OpenBracket,
 			')' => Token::CloseBracket,
 			'[' => Token::OpenSquareBracket,
@@ -189,7 +219,7 @@ impl<'a> Lexer<'a> {
 		let (mut invalid, mut seen_period): (bool, bool) = (true, false);
 		let mut current: char = self.read_char()?;
 		if !current.is_ascii_digit() {
-			bail!("Invalid number start character '{current}'!")
+			bail!("Invalid number start character '{current}'!");
 		};
 		// TODO: '_' support for numbers
 		while current.is_ascii_digit() || current == '.' {
@@ -218,11 +248,14 @@ impl<'a> Lexer<'a> {
 			let is_next_significant: bool = !next.is_whitespace();
 
 			if !NEXT_VALID_VALUES.contains(&next) && is_next_significant {
-				bail!("Unexpected character(s) found after real '{buf}'!  First was '{next}'!")
+				bail!("Unexpected character(s) found after real '{buf}'!  First was '{next}'!");
 			};
 			if is_next_significant {
 				self.cached_chars.push_back(next);
 			};
+		} else if !current.is_whitespace() {
+			// Push back significant chars because of accidental greedy consumption.
+			self.cached_chars.push_back(current);
 		};
 		Ok(buf)
 	}
@@ -253,7 +286,7 @@ impl<'a> Lexer<'a> {
 		// The `invalid` variable is true by default, the only way for it to be false is for an alphabetic character to be appended to `buf`.
 		// If `buf` is empty, then no characters were appended, so `invalid` is true.
 		if invalid {
-			bail!("Invalid identifier '{buf}'!")
+			bail!("Invalid identifier '{buf}'!");
 		};
 		Ok(buf)
 	}
@@ -309,13 +342,17 @@ impl<'a> Lexer<'a> {
 				cold_path();
 				bail!(ReadError::DisallowedASCIIChar(initial));
 			};
+			#[expect(
+				clippy::as_conversions,
+				reason = "False positive.  This cast is directly equivalent to using `char::from(_)`."
+			)]
 			// SANITY(fast-path): All ASCII chars are single-byte.
-			return Ok(char::from(initial));
+			return Ok(initial as char);
 		};
 
 		#[expect(
 			clippy::as_conversions,
-			reason = "False positive.  These casts are safe."
+			reason = "False positive.  These casts are directly equivalent to `usize::from(_)`."
 		)]
 		let len: usize = {
 			// SANITY(unusual):
