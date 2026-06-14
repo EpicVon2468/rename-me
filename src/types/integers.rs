@@ -82,7 +82,7 @@ impl __Type for __128BitInteger {
 		// Excuse(s):
 		// - The passed parameter is a known valid `LLVMTypeRef` integer type.
 		let result: IntType = unsafe { IntType::new(raw_ty) };
-		Box::new(result)
+		result.into()
 	}
 
 	fn dbg_info(&self) -> String {

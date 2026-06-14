@@ -36,6 +36,8 @@ pub enum Token {
 	External,
 	/// `CONSTANT : 'c' 'o' 'n' 's' 't' ;`
 	Constant,
+	/// `PRIVATE : 'p' 'r' 'i' 'v' 'a' 't' 'e' ;`
+	Private,
 	/// `RETURN : 'r' 'e' 't' 'u' 'r' 'n' ;`
 	Return,
 	/// `VAL : 'v' 'a' 'l' ;`
@@ -100,6 +102,8 @@ pub enum Token {
 	Equals,
 	/// `EXCLAMATION_MARK : '!' ;`
 	ExclamationMark,
+	/// `HASH : '#' ;`
+	Hash,
 }
 
 pub type Src<'a> = &'a mut dyn Read;
@@ -169,6 +173,7 @@ impl<'a> Lexer<'a> {
 					"unsafe" => Token::Unsafe,
 					"extern" => Token::External,
 					"const" => Token::Constant,
+					"private" => Token::Private,
 					"return" => Token::Return,
 					"val" => Token::Val,
 					"llvm-cold" => Token::Cold,
@@ -210,12 +215,13 @@ impl<'a> Lexer<'a> {
 			',' => Token::Comma,
 			'=' => Token::Equals,
 			'!' => Token::ExclamationMark,
+			'#' => Token::Hash,
 			other => bail!("Unrecognised character input '{other}'!"),
 		})
 	}
 
 	fn read_num_chars(&mut self) -> Result<String> {
-		let mut buf: String = String::with_capacity(8);
+		let mut buf: String = String::with_capacity(32);
 		let (mut invalid, mut seen_period): (bool, bool) = (true, false);
 		let mut current: char = self.read_char()?;
 		if !current.is_ascii_digit() {
@@ -350,21 +356,25 @@ impl<'a> Lexer<'a> {
 			return Ok(initial as char);
 		};
 
+		if initial < 192 {
+			bail!(ReadError::ZeroLengthByte(initial));
+		};
+
 		#[expect(
 			clippy::as_conversions,
 			reason = "False positive.  These casts are directly equivalent to `usize::from(_)`."
 		)]
 		let len: usize = {
 			// SANITY(unusual):
-			// 128 is subtracted because the value is always >= 128 at this point.
-			// This means space can be saved by stripping the first 128 entries.
+			// 192 is subtracted because the value is always >= 192 at this point.
+			// This means space can be saved by stripping the first 192 entries.
 			// SAFETY:
 			// Problem(s):
 			// - `u8::unchecked_sub()` can underflow or overflow.
 			// Excuse(s):
-			// - The amount being subtracted is a trusted constant value (128).
-			// - The value of `initial` is always >= 128 at this point, meaning subtracting 128 is always safe.
-			let index: usize = unsafe { initial.unchecked_sub(128) } as usize;
+			// - The amount being subtracted is a trusted constant value (192).
+			// - The value of `initial` is always >= 192 at this point, meaning subtracting 192 is always safe.
+			let index: usize = unsafe { initial.unchecked_sub(192) } as usize;
 
 			// Determine UTF-8 byte length for a multibyte char.
 			// SANITY(unusual): Cheaper to store 128 `u8`s and convert at use-site than to store 128 `usize`s.
@@ -379,6 +389,7 @@ impl<'a> Lexer<'a> {
 		buf[0] = initial;
 		self.read(&mut buf[1..])?;
 
+		// TODO: Could use `buf.utf8_chunks().next()`...
 		// SANITY(unusual): There doesn't appear to be any other way to make a `char` from a `u8` slice than this.
 		let string: &str = match str::from_utf8(&buf) {
 			Ok(result) => result,
@@ -473,16 +484,13 @@ static DISALLOWED_ASCII_CHARS: [u8; 27] = [
 ];
 
 // SANITY(overhead + unusual):
-// Copied from `core`'s str internals, w/o the first 128 entries.
-// Cheaper to store 128 `u8`s and convert at use-site than to store 128 `usize`s.
+// Copied from `core`'s str internals, w/o the first 192 entries.
+// Cheaper to store 192 `u8`s and convert at use-site than to store 192 `usize`s.
 // The first 128 entries (which were all 1) were stripped out, as the only use of this value is non-ASCII.
+// The next 64 entries (which were all 0) were also stripped out.
 // https://tools.ietf.org/html/rfc3629
-static UTF8_CHAR_WIDTH: [u8; 128] = [
+static UTF8_CHAR_WIDTH: [u8; 64] = [
 	// 1  2  3  4  5  6  7  8  9  A  B  C  D  E  F
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 8
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 9
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // A
-	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // B
 	0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, // C
 	2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, // D
 	3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, // E

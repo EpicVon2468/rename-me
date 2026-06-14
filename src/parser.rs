@@ -1,6 +1,5 @@
-use std::collections::HashMap;
 use std::error::Error;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::hint::{cold_path, unreachable_unchecked};
 
 use anyhow::{Context as _, Result, bail};
@@ -20,44 +19,124 @@ use crate::types::integers::{
 	__64BitInteger,
 	__128BitInteger,
 };
-use crate::types::{__Boolean, __Type};
+use crate::types::{__Boolean, __Type, __Void};
 
-pub mod attrs {
-	pub type Attributes = u8;
-
-	macro_rules! attr_checker {
-		($fn_name:ident, $attr:expr $(,)?) => {
-			#[inline(always)]
-			pub const fn $fn_name(attributes: Attributes) -> bool {
-				attributes & $attr != 0
-			}
-		};
-	}
-
-	pub const ATTR_CONSTANT: Attributes = 0b0001;
-	attr_checker!(is_constant, ATTR_CONSTANT);
-
-	pub const ATTR_UNSAFE: Attributes = 0b0010;
-	attr_checker!(is_unsafe, ATTR_UNSAFE);
-
-	pub const ATTR_EXTERNAL: Attributes = 0b0100;
-	attr_checker!(is_external, ATTR_EXTERNAL);
-
-	pub const ATTR_PRIVATE: Attributes = 0b1000;
-	attr_checker!(is_private, ATTR_PRIVATE);
+macro_rules! bitflag {
+	($flag_ty:ty, $flag:expr, $fn_name:ident $(,)?) => {
+		#[inline(always)]
+		pub const fn $fn_name(input: $flag_ty) -> bool {
+			input & $flag != 0
+		}
+	};
 }
 
-use attrs::{ATTR_CONSTANT, ATTR_UNSAFE, Attributes};
+pub mod modifiers {
+	use std::fmt::{Formatter, Result};
 
+	pub type Modifiers = u8;
+	pub fn fmt_modifiers(val: u8, fmt: &mut Formatter<'_>) -> Result {
+		fmt.debug_struct("Modifiers")
+			.field("is_constant", &is_constant(val))
+			.field("is_unsafe", &is_unsafe(val))
+			.field("is_external", &is_external(val))
+			.field("is_private", &is_private(val))
+			.finish()
+	}
+
+	pub const MOD_CONSTANT: Modifiers = 0b0001;
+	bitflag!(Modifiers, MOD_CONSTANT, is_constant);
+
+	pub const MOD_UNSAFE: Modifiers = 0b0010;
+	bitflag!(Modifiers, MOD_UNSAFE, is_unsafe);
+
+	pub const MOD_EXTERNAL: Modifiers = 0b0100;
+	bitflag!(Modifiers, MOD_EXTERNAL, is_external);
+
+	pub const MOD_PRIVATE: Modifiers = 0b1000;
+	bitflag!(Modifiers, MOD_PRIVATE, is_private);
+}
+
+pub mod fn_attrs {
+	use std::fmt::Formatter;
+
+	use crate::lexer::Token;
+
+	pub type Attributes = u8;
+	pub fn fmt_attributes(val: u8, fmt: &mut Formatter<'_>) -> std::fmt::Result {
+		fmt.debug_struct("Attributes")
+			.field("is_cold", &is_cold(val))
+			.field("is_hot", &is_hot(val))
+			.field("is_strictfp", &is_strictfp(val))
+			.field("is_try_inline", &is_try_inline(val))
+			.field("is_force_inline", &is_force_inline(val))
+			.finish()
+	}
+
+	#[must_use]
+	pub const fn from_token(token: &Token) -> Option<Attributes> {
+		match *token {
+			Token::Cold => Some(ATTR_COLD),
+			Token::Hot => Some(ATTR_HOT),
+			Token::StrictFloatingPoint => Some(ATTR_STRICTFP),
+			Token::TryInline => Some(ATTR_TRY_INLINE),
+			Token::ForceInline => Some(ATTR_FORCE_INLINE),
+			_ => None,
+		}
+	}
+
+	pub const ATTR_COLD: Attributes = 0b0000_0001;
+	bitflag!(Attributes, ATTR_COLD, is_cold);
+
+	pub const ATTR_HOT: Attributes = 0b0000_0010;
+	bitflag!(Attributes, ATTR_HOT, is_hot);
+
+	pub const ATTR_STRICTFP: Attributes = 0b0000_0100;
+	bitflag!(Attributes, ATTR_STRICTFP, is_strictfp);
+
+	pub const ATTR_TRY_INLINE: Attributes = 0b0000_1000;
+	bitflag!(Attributes, ATTR_TRY_INLINE, is_try_inline);
+
+	pub const ATTR_FORCE_INLINE: Attributes = 0b0001_0000;
+	bitflag!(Attributes, ATTR_FORCE_INLINE, is_force_inline);
+}
+
+use fn_attrs::{Attributes, fmt_attributes};
+use modifiers::{MOD_CONSTANT, MOD_EXTERNAL, MOD_PRIVATE, MOD_UNSAFE, Modifiers, fmt_modifiers};
+
+#[must_use]
+#[derive(Debug)]
+pub enum TopLevel {
+	Function(FunctionDeclaration),
+}
+
+#[must_use]
 pub struct FunctionDeclaration {
+	pub modifiers: Modifiers,
 	pub attributes: Attributes,
 	pub identifier: String,
-	// TODO: identifier : type
-	pub parameters: HashMap<String, String>,
-	pub return_type: String,
+	// HashMap is not ordered
+	pub parameters: Vec<(String, Box<dyn __Type>)>,
+	pub return_type: Box<dyn __Type>,
+}
+
+impl Debug for FunctionDeclaration {
+	fn fmt(&self, fmt: &mut Formatter<'_>) -> std::fmt::Result {
+		fmt.debug_struct("FunctionDeclaration")
+			.field_with("modifiers", |fmt: &mut Formatter<'_>| {
+				fmt_modifiers(self.modifiers, fmt)
+			})
+			.field_with("attributes", |fmt: &mut Formatter<'_>| {
+				fmt_attributes(self.attributes, fmt)
+			})
+			.field("identifier", &self.identifier)
+			.field("parameters", &self.parameters)
+			.field("return_type", &self.return_type)
+			.finish()
+	}
 }
 
 /// `stmt : variableStmt | assignmentStmt | unitStmt ;`
+#[must_use]
 #[derive(Debug)]
 pub enum Stmt {
 	/// `variableStmt : VAL ( assignmentStmt | IDENTIFIER ) ;`
@@ -68,6 +147,7 @@ pub enum Stmt {
 	Unit(Expr),
 }
 
+#[must_use]
 #[derive(Debug)]
 pub enum Expr {
 	/// `addExpr : expr PLUS expr ;`
@@ -84,7 +164,7 @@ pub enum Expr {
 	FunctionCall(String, Vec<Self>),
 	VariableRef(String),
 	/// `blockExpr : ( CONSTANT? UNSAFE? )? OPEN_CURLY stmt* expr CLOSE_CURLY ;`
-	Block(Attributes, Vec<Stmt>, Box<Self>),
+	Block(Modifiers, Vec<Stmt>, Box<Self>),
 	IntegerLiteral(u128),
 	// FIXME: Use f128 once RustRover supports it (LLVM has explicit support for it).
 	FloatLiteral(f64),
@@ -170,6 +250,7 @@ impl Parser<'_> {
 		// SANITY(ptr) + SAFETY: `identifier` is a non-empty ASCII string slice.
 		let integer_is_unsigned: bool = unsafe { *identifier.as_ptr() } == b'u';
 		match identifier {
+			"void" => bx!(__Void::instance()),
 			"bool" => bx!(__Boolean::instance()),
 			"u8" | "i8" => bx!(__8BitInteger::new(integer_is_unsigned)),
 			"u16" | "i16" => bx!(__16BitInteger::new(integer_is_unsigned)),
@@ -198,9 +279,137 @@ impl<'a> Parser<'a> {
 		Self::new(Lexer::new(src))
 	}
 
-	pub fn parse(&mut self) -> Result<()> {
-		let _ = dbg!(self.parse_expr()?);
-		Ok(())
+	pub fn parse(&mut self) -> Result<TopLevel> {
+		self.parse_top_level()
+	}
+
+	pub fn parse_top_level(&mut self) -> Result<TopLevel> {
+		let mut modifiers: Modifiers = 0;
+		macro_rules! try_eat_extern {
+			() => {
+				if *self.lexer.peek_token()? == Token::External {
+					// Eat 'extern'.
+					let _ = self.lexer.read_token();
+					modifiers |= MOD_EXTERNAL;
+				};
+			};
+		}
+		macro_rules! try_eat_unsafe_extern {
+			() => {
+				if *self.lexer.peek_token()? == Token::Unsafe {
+					// Eat 'unsafe'.
+					let _ = self.lexer.read_token();
+					modifiers |= MOD_UNSAFE;
+					try_eat_extern!();
+				};
+			};
+		}
+		let attributes: Attributes = if *self.lexer.peek_token()? == Token::Hash {
+			self.parse_function_attrs()?
+		} else {
+			0
+		};
+		match *self.lexer.peek_token()? {
+			// Continue down.
+			Token::Function => (),
+			Token::Private => {
+				// Eat 'private'.
+				let _ = self.lexer.read_token();
+				modifiers |= MOD_PRIVATE;
+				if *self.lexer.peek_token()? == Token::Constant {
+					// Eat 'const'.
+					let _ = self.lexer.read_token();
+					modifiers |= MOD_CONSTANT;
+				};
+				try_eat_unsafe_extern!();
+			},
+			Token::Constant => {
+				// Eat 'const'.
+				let _ = self.lexer.read_token();
+				modifiers |= MOD_CONSTANT;
+				try_eat_unsafe_extern!();
+			},
+			Token::Unsafe => {
+				// Eat 'unsafe'.
+				let _ = self.lexer.read_token();
+				modifiers |= MOD_UNSAFE;
+				try_eat_extern!();
+			},
+			_ => bail!(UnexpectedTokenError {
+				unexpected: self
+					.lexer
+					.read_token()
+					.expect("Unreachable panic, this read is cached."),
+			}),
+		};
+		// Eat 'funct'.
+		expect_token!(self.lexer.read_token()?, Token::Function);
+		let token: Token = self.lexer.read_token()?;
+		let Token::Identifier(mut identifier): Token = token else {
+			bail!(UnexpectedTokenError { unexpected: token });
+		};
+		identifier.push('\0');
+		let parameters: Vec<(String, Box<dyn __Type>)> = self.parse_function_parameters()?;
+		let return_type: Box<dyn __Type> = if *self.lexer.peek_token()? == Token::Colon {
+			// Eat ':'.
+			let _ = self.lexer.read_token();
+			let token: Token = self.lexer.read_token()?;
+			let Token::Identifier(return_type): Token = token else {
+				bail!(UnexpectedTokenError { unexpected: token })
+			};
+			self.type_by_name(&return_type)
+		} else {
+			Box::new(__Void::instance())
+		};
+		let declaration: FunctionDeclaration = FunctionDeclaration {
+			modifiers,
+			attributes,
+			identifier,
+			parameters,
+			return_type,
+		};
+		Ok(TopLevel::Function(declaration))
+	}
+
+	pub fn parse_function_parameters(&mut self) -> Result<Vec<(String, Box<dyn __Type>)>> {
+		// Eat '('.
+		expect_token!(self.lexer.read_token()?, Token::OpenBracket);
+
+		// SANITY(fast-path): Immediate return if the next token is ')'.
+		if *self.lexer.peek_token()? == Token::CloseBracket {
+			return Ok(Vec::new());
+		};
+		todo!()
+	}
+
+	pub fn parse_function_attrs(&mut self) -> Result<Attributes> {
+		// Eat '#'.
+		expect_token!(self.lexer.read_token()?, Token::Hash);
+		// Eat '('.
+		expect_token!(self.lexer.read_token()?, Token::OpenBracket);
+
+		let mut output: Attributes = 0;
+		loop {
+			let token: Token = self.lexer.read_token()?;
+			if let Some(attr) = fn_attrs::from_token(&token) {
+				output |= attr;
+				match self.lexer.read_token()? {
+					Token::Comma => {
+						// Don't try to continue if the next token is ')'.
+						if *self.lexer.peek_token()? == Token::CloseBracket {
+							// Eat ')'.
+							let _ = self.lexer.read_token();
+							break;
+						};
+						continue;
+					},
+					Token::CloseBracket => break,
+					unexpected => bail!(UnexpectedTokenError { unexpected }),
+				};
+			};
+			bail!(UnexpectedTokenError { unexpected: token });
+		}
+		Ok(output)
 	}
 
 	pub fn parse_expr(&mut self) -> Result<Expr> {
@@ -264,9 +473,9 @@ impl<'a> Parser<'a> {
 		let result: Expr = if let Some(unary) = op {
 			// Eat `op`.
 			let _ = self.lexer.read_token();
-			Expr::Unary(unary, Box::new(self.parse_function_expr()?))
+			Expr::Unary(unary, Box::new(self.parse_function_call_expr()?))
 		} else {
-			self.parse_function_expr()?
+			self.parse_function_call_expr()?
 		};
 		Ok(result)
 	}
@@ -298,8 +507,7 @@ impl<'a> Parser<'a> {
 		identifier
 	}
 
-	pub fn parse_function_expr(&mut self) -> Result<Expr> {
-		// FIXME: This conflicts with identifiers.  Can't peek ahead multiple times because of lexer limitations.
+	pub fn parse_function_call_expr(&mut self) -> Result<Expr> {
 		let Token::Identifier(_): Token = *self.lexer.peek_token()? else {
 			return self.parse_primary_expr();
 		};
@@ -307,11 +515,16 @@ impl<'a> Parser<'a> {
 		// SAFETY: The code above this line confirms that the next token will be `Token::Identifier`.
 		let identifier: String = unsafe { self.take_identifier() };
 
+		// SANITY(unusual): Hack to get variable references because of limitations with lexer peeking.
+		if *self.lexer.peek_token()? != Token::OpenBracket {
+			return Ok(Expr::VariableRef(identifier));
+		};
+
 		// Eat '('.
-		expect_token!(self.lexer.read_token()?, Token::OpenBracket);
+		let _ = self.lexer.read_token();
 
 		// SANITY(fast-path): No need to allocate a proper `Vec` or loop if there are no parameters.
-		if self.lexer.peek_token()? == &Token::CloseBracket {
+		if *self.lexer.peek_token()? == Token::CloseBracket {
 			// Eat ')'.
 			let _ = self.lexer.read_token();
 			return Ok(Expr::FunctionCall(identifier, Vec::new()));
@@ -341,9 +554,9 @@ impl<'a> Parser<'a> {
 				expect_token!(self.lexer.read_token()?, Token::CloseBracket);
 				result
 			},
-			// SANITY(unusual): This is cheaper than calling `<&String>::to_owned` to duplicate the reference from peeking.
-			// SAFETY: This match arm ensures the next token will be `Token::Identifier`.
-			Token::Identifier(_) => Expr::VariableRef(unsafe { self.take_identifier() }),
+			// // SANITY(unusual): This is cheaper than calling `<&String>::to_owned` to duplicate the reference from peeking.
+			// // SAFETY: This match arm ensures the next token will be `Token::Identifier`.
+			// Token::Identifier(_) => Expr::VariableRef(unsafe { self.take_identifier() }),
 			Token::Literal(ref literal) => {
 				let value: u128 = literal.parse().context("Couldn't parse integer literal.")?;
 				// Eat `value`.
@@ -366,20 +579,20 @@ impl<'a> Parser<'a> {
 	}
 
 	pub fn parse_block_expr(&mut self) -> Result<Expr> {
-		let mut attributes: Attributes = 0;
+		let mut modifiers: Modifiers = 0;
 		match self.lexer.read_token()? {
 			Token::Constant => {
-				attributes |= ATTR_CONSTANT;
-				if self.lexer.peek_token()? == &Token::Unsafe {
+				modifiers |= MOD_CONSTANT;
+				if *self.lexer.peek_token()? == Token::Unsafe {
 					// Eat 'unsafe'.
 					let _ = self.lexer.read_token();
-					attributes |= ATTR_UNSAFE;
+					modifiers |= MOD_UNSAFE;
 				};
 				// Eat '{'.
 				expect_token!(self.lexer.read_token()?, Token::OpenCurlyBracket);
 			},
 			Token::Unsafe => {
-				attributes |= ATTR_UNSAFE;
+				modifiers |= MOD_UNSAFE;
 				// Eat '{'.
 				expect_token!(self.lexer.read_token()?, Token::OpenCurlyBracket);
 			},
@@ -387,7 +600,7 @@ impl<'a> Parser<'a> {
 			unexpected => bail!(UnexpectedTokenError { unexpected }),
 		};
 		let mut result: Vec<Stmt> = Vec::with_capacity(4);
-		let expr: Expr = Expr::Block(attributes, todo!(), todo!());
+		let expr: Expr = Expr::Block(modifiers, todo!(), todo!());
 		Ok(expr)
 	}
 

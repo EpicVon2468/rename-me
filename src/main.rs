@@ -54,7 +54,7 @@
 	reason = "Shush"
 )]
 #![allow(clippy::borrowed_box)]
-#![feature(derive_const, const_cmp, const_trait_impl, likely_unlikely)]
+#![feature(derive_const, const_cmp, const_trait_impl, debug_closure_helpers)]
 #![doc = include_str!("../README.md")]
 pub mod codegen;
 pub mod lexer;
@@ -66,19 +66,31 @@ use anyhow::Result;
 use inkwell::support::{enable_llvm_pretty_stack_trace, get_llvm_version, shutdown_llvm};
 
 use crate::codegen::CodeGen;
-use crate::parser::Parser;
+use crate::parser::{FunctionDeclaration, Parser, TopLevel};
 
 pub fn main() -> Result<()> {
 	{
-		let mut input: &[u8] = b"1 + 42.0f * 2;";
-		let mut parser: Parser = Parser::from(&mut input);
-		parser.parse()?;
+		{
+			let mut input: &[u8] = b"1 + 42.0f * 2;";
+			let mut parser: Parser = Parser::from(&mut input);
+			let _ = dbg!(parser.parse_expr()?);
+		};
+		let function: FunctionDeclaration = {
+			let mut input: &[u8] = b"#(llvm-hot, strict-fp, force-inline) const funct main() {}";
+			let mut parser: Parser = Parser::from(&mut input);
+			let TopLevel::Function(function): TopLevel = dbg!(parser.parse()?);
+			function
+		};
 		{
 			enable_llvm_pretty_stack_trace();
 			let (major, minor, patch): (u32, u32, u32) = get_llvm_version();
 			println!("Loading with LLVM version {major}.{minor}.{patch}...");
 		};
 		let codegen: CodeGen = CodeGen::new("test");
+		// SAFETY:
+		unsafe {
+			codegen.create_function(&function);
+		};
 		codegen.debug();
 	};
 	// SAFETY:
