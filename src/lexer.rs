@@ -7,6 +7,8 @@ use std::str::Utf8Error;
 
 use anyhow::{Result, anyhow, bail};
 
+use crate::const_num_env;
+
 /// `LETTER : [a-zA-Z]`
 ///
 /// `NUM : [0-9]`
@@ -106,14 +108,6 @@ pub enum Token {
 	Hash,
 }
 
-pub type Src<'a> = &'a mut dyn Read;
-
-pub struct Lexer<'a> {
-	src: Src<'a>,
-	cached: Option<Token>,
-	cached_chars: VecDeque<char>,
-}
-
 macro_rules! expect_char {
 	($actual:expr; $($expected:expr),* $(,)?) => {
 		$(expect_char!($actual, $expected);)*
@@ -139,10 +133,24 @@ const fn is_valid_for_identifier_rest(input: char) -> bool {
 	input.is_ascii_alphanumeric() || input == '_' || input == '-'
 }
 
-impl<'a> Lexer<'a> {
-	pub fn new(src: Src<'a>) -> Self {
+pub type Source<'src> = &'src mut dyn Read;
+
+pub struct Lexer<'src> {
+	source: Source<'src>,
+	cached: Option<Token>,
+	cached_chars: VecDeque<char>,
+}
+
+const impl<'src> From<Source<'src>> for Lexer<'src> {
+	fn from(value: Source<'src>) -> Self {
+		Self::new(value)
+	}
+}
+
+impl<'src> Lexer<'src> {
+	pub const fn new(source: Source<'src>) -> Self {
 		Self {
-			src,
+			source,
 			cached: None,
 			cached_chars: VecDeque::new(),
 		}
@@ -221,7 +229,7 @@ impl<'a> Lexer<'a> {
 	}
 
 	fn read_num_chars(&mut self) -> Result<String> {
-		let mut buf: String = String::with_capacity(32);
+		let mut buf: String = String::with_capacity(const_num_env!("__NUM_BUF_CAPACITY", 16));
 		let (mut invalid, mut seen_period): (bool, bool) = (true, false);
 		let mut current: char = self.read_char()?;
 		if !current.is_ascii_digit() {
@@ -267,7 +275,7 @@ impl<'a> Lexer<'a> {
 	}
 
 	fn read_ident_chars(&mut self) -> Result<String> {
-		let mut buf: String = String::with_capacity(16);
+		let mut buf: String = String::with_capacity(const_num_env!("__IDENT_BUF_CAPACITY", 16));
 		let mut invalid: bool = true;
 		let mut current: char = self.read_char()?;
 		if !is_valid_for_identifier_first(current) {
@@ -297,12 +305,6 @@ impl<'a> Lexer<'a> {
 		Ok(buf)
 	}
 
-	fn peek_char(&mut self) -> Result<char> {
-		let next: char = self.next_sig_char_impl()?;
-		self.cached_chars.push_back(next);
-		Ok(next)
-	}
-
 	// next significant character
 	fn next_sig_char(&mut self) -> Result<char> {
 		if let Some(cached) = self.cached_chars.pop_back() {
@@ -320,7 +322,7 @@ impl<'a> Lexer<'a> {
 	}
 
 	fn read(&mut self, buf: &mut [u8]) -> Result<()> {
-		self.src
+		self.source
 			.read_exact(buf)
 			.map_err(|error: IOError| anyhow!(ReadError::ForwardedIOError(error)))
 	}

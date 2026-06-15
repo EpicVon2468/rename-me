@@ -54,7 +54,16 @@
 	reason = "Shush"
 )]
 #![allow(clippy::borrowed_box)]
-#![feature(derive_const, const_cmp, const_trait_impl, debug_closure_helpers)]
+#![feature(
+	derive_const,
+	const_cmp,
+	const_trait_impl,
+	debug_closure_helpers,
+	const_option_ops,
+	const_range,
+	const_result_trait_fn,
+	const_convert
+)]
 #![doc = include_str!("../README.md")]
 pub mod codegen;
 pub mod lexer;
@@ -64,20 +73,54 @@ pub mod types;
 use anyhow::Result;
 
 use inkwell::support::{enable_llvm_pretty_stack_trace, get_llvm_version, shutdown_llvm};
-
+use parser::function::FunctionDeclaration;
 use crate::codegen::CodeGen;
-use crate::parser::{FunctionDeclaration, Parser, TopLevel};
+use crate::lexer::Source;
+use crate::parser::{Parser, TopLevel};
+
+#[macro_export]
+macro_rules! suggest_unreachable {
+	($($arg:tt)*) => {{
+		std::hint::cold_path();
+		unreachable!($($arg,)*);
+	}};
+}
+
+#[macro_export]
+macro_rules! const_num_env {
+	($env:literal, $default:literal $(,)?) => {
+		const {
+			#[inline(always)]
+			const fn mapper(value: &str) -> usize {
+				<usize as std::str::FromStr>::from_str(value).unwrap_or($default)
+			}
+			let value: usize = option_env!($env).map_or($default, mapper);
+			#[allow(clippy::as_conversions)]
+			{
+				assert!(
+					(0..=(isize::MAX as usize)).contains(&value),
+					concat!(
+						"Numeric environment variable '",
+						$env,
+						"' must be valid for allocation!",
+					),
+				);
+			};
+			value
+		}
+	};
+}
 
 pub fn main() -> Result<()> {
 	{
 		{
 			let mut input: &[u8] = b"1 + 42.0f * 2;";
-			let mut parser: Parser = Parser::from(&mut input);
+			let mut parser: Parser = Source::into(&mut input);
 			let _ = dbg!(parser.parse_expr()?);
 		};
 		let function: FunctionDeclaration = {
-			let mut input: &[u8] = b"#(llvm-hot, strict-fp, force-inline) const funct main() {}";
-			let mut parser: Parser = Parser::from(&mut input);
+			let mut input: &[u8] = b"#(llvm-hot, strict-fp, force-inline) const funct main(): i32;";
+			let mut parser: Parser = Source::into(&mut input);
 			let TopLevel::Function(function): TopLevel = dbg!(parser.parse()?);
 			function
 		};

@@ -8,7 +8,7 @@ use inkwell::types::{AsTypeRef as _, BasicMetadataTypeEnum, FunctionType};
 use inkwell::values::FunctionValue;
 
 use crate::map_llvm_type;
-use crate::parser::FunctionDeclaration;
+use crate::parser::function::FunctionDeclaration;
 use crate::parser::fn_attrs::{
 	Attributes,
 	is_cold,
@@ -54,7 +54,7 @@ impl<'ctx> CodeGen<'ctx> {
 	/// Lifetimes, amirite?
 	pub unsafe fn create_function(&self, function: &FunctionDeclaration) {
 		let linkage: Option<Linkage> = {
-			let modifiers: Modifiers = function.modifiers;
+			let modifiers: Modifiers = function.modifiers();
 			if is_external(modifiers) {
 				Some(Linkage::External)
 			} else if is_private(modifiers) {
@@ -63,8 +63,8 @@ impl<'ctx> CodeGen<'ctx> {
 				None
 			}
 		};
-		let raw_type: LLVMType = function.return_type.provide_llvm_type(&self.context);
-		let parameter_types: Vec<BasicMetadataTypeEnum> = function.parameters.iter().map(|entry: &(_, Box<dyn __Type>)| {
+		let raw_type: LLVMType = function.return_type().provide_llvm_type(&self.context);
+		let parameter_types: Vec<BasicMetadataTypeEnum> = function.parameters().iter().map(|entry: &(_, Box<dyn __Type>)| {
 			let type_enum: LLVMType = entry.1.provide_llvm_type(&self.context);
 			let mapped: BasicMetadataTypeEnum = map_llvm_type!(ArrayType, FloatType, IntType, PointerType, StructType, VectorType, ScalableVectorType; type_enum);
 			mapped
@@ -90,7 +90,7 @@ impl<'ctx> CodeGen<'ctx> {
 				LLVMAddFunction(
 					self.module.as_mut_ptr(),
 					// SAFETY: `Parser` appends a null byte termination to the identifier.
-					function.identifier.as_ptr().cast(),
+					function.identifier().as_ptr().cast(),
 					function_type.as_type_ref(),
 				)
 			};
@@ -105,7 +105,7 @@ impl<'ctx> CodeGen<'ctx> {
 			value.set_linkage(linkage);
 		};
 		{
-			let attrs: Attributes = function.attributes;
+			let attrs: Attributes = function.attributes();
 			macro_rules! add_function_attr {
 				($attr:literal) => {
 					value.add_attribute(

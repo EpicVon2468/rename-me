@@ -1,3 +1,5 @@
+use std::fmt::{Debug, Formatter, Result};
+
 use inkwell::context::Context;
 
 use crate::simple_type_impl;
@@ -24,7 +26,6 @@ macro_rules! integer_type {
 		#[doc = concat!("assert!(!i", $num_bits, "_type.is_unsigned());")]
 		#[doc = "```"]
 		#[derive_const(PartialEq, Eq)]
-		#[derive(Debug)]
 		#[must_use]
 		pub enum $__int {
 			#[doc = concat!("Signed ", $num_bits, "-bit integer type.")]
@@ -58,6 +59,19 @@ macro_rules! integer_type {
 				Self::new(true)
 			}
 		}
+
+		impl Debug for $__int {
+			fn fmt(&self, fmt: &mut Formatter<'_>) -> Result {
+				write!(
+					fmt,
+					concat!(stringify!($__int), "::{}"),
+					match *self {
+						Self::Signed => "Signed",
+						Self::Unsigned => "Unsigned",
+					},
+				)
+			}
+		}
 	};
 }
 
@@ -66,6 +80,21 @@ integer_type!(__16BitInteger, 16, Some(i16_type));
 integer_type!(__32BitInteger, 32, Some(i32_type));
 integer_type!(__64BitInteger, 64, Some(i64_type));
 integer_type!(__128BitInteger, 128, None);
+
+// RustRover doesn't understand `cfg_select!` >.>
+
+#[cfg(target_pointer_width = "64")]
+pub type __Size = __64BitInteger;
+#[cfg(target_pointer_width = "32")]
+pub type __Size = __32BitInteger;
+#[cfg(target_pointer_width = "16")]
+pub type __Size = __16BitInteger;
+#[cfg(all(
+	not(target_pointer_width = "64"),
+	not(target_pointer_width = "32"),
+	not(target_pointer_width = "16"),
+))]
+compile_error!("Unsupported host!");
 
 impl __Type for __128BitInteger {
 	// FIXME: `Context` doesn't (currently) use `LLVMInt128TypeInContext()` under the hood.  Instead they use a custom-width integer type.  Awaiting fix.

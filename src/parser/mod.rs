@@ -1,10 +1,10 @@
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
-use std::hint::{cold_path, unreachable_unchecked};
+use std::hint::cold_path;
 
 use anyhow::{Context as _, Result, bail};
 
-use crate::lexer::{Lexer, Src, Token};
+use crate::lexer::{Lexer, Source, Token};
 use crate::types::floats::{
 	__16BitBrainFloatingPoint,
 	__16BitFloatingPoint,
@@ -18,8 +18,10 @@ use crate::types::integers::{
 	__32BitInteger,
 	__64BitInteger,
 	__128BitInteger,
+	__Size,
 };
 use crate::types::{__Boolean, __Type, __Void};
+use crate::{const_num_env, suggest_unreachable};
 
 macro_rules! bitflag {
 	($flag_ty:ty, $flag:expr, $fn_name:ident $(,)?) => {
@@ -100,39 +102,16 @@ pub mod fn_attrs {
 	bitflag!(Attributes, ATTR_FORCE_INLINE, is_force_inline);
 }
 
-use fn_attrs::{Attributes, fmt_attributes};
-use modifiers::{MOD_CONSTANT, MOD_EXTERNAL, MOD_PRIVATE, MOD_UNSAFE, Modifiers, fmt_modifiers};
+pub mod function;
+
+use fn_attrs::Attributes;
+use function::FunctionDeclaration;
+use modifiers::{MOD_CONSTANT, MOD_EXTERNAL, MOD_PRIVATE, MOD_UNSAFE, Modifiers};
 
 #[must_use]
 #[derive(Debug)]
 pub enum TopLevel {
 	Function(FunctionDeclaration),
-}
-
-#[must_use]
-pub struct FunctionDeclaration {
-	pub modifiers: Modifiers,
-	pub attributes: Attributes,
-	pub identifier: String,
-	// HashMap is not ordered
-	pub parameters: Vec<(String, Box<dyn __Type>)>,
-	pub return_type: Box<dyn __Type>,
-}
-
-impl Debug for FunctionDeclaration {
-	fn fmt(&self, fmt: &mut Formatter<'_>) -> std::fmt::Result {
-		fmt.debug_struct("FunctionDeclaration")
-			.field_with("modifiers", |fmt: &mut Formatter<'_>| {
-				fmt_modifiers(self.modifiers, fmt)
-			})
-			.field_with("attributes", |fmt: &mut Formatter<'_>| {
-				fmt_attributes(self.attributes, fmt)
-			})
-			.field("identifier", &self.identifier)
-			.field("parameters", &self.parameters)
-			.field("return_type", &self.return_type)
-			.finish()
-	}
 }
 
 /// `stmt : variableStmt | assignmentStmt | unitStmt ;`
@@ -192,10 +171,6 @@ pub enum Unary {
 	Ref,
 }
 
-pub struct Parser<'a> {
-	lexer: Lexer<'a>,
-}
-
 macro_rules! expect_token {
 	($actual:expr, $expected:expr $(,)?) => {{
 		let token = $actual;
@@ -232,51 +207,26 @@ macro_rules! handle_erroneous {
 	}};
 }
 
-impl Parser<'_> {
-	#[must_use]
-	pub fn type_by_name(&self, identifier: &str) -> Box<dyn __Type> {
-		#[expect(clippy::panic)]
-		if identifier.is_empty() || !identifier.is_ascii() {
-			// SANITY(unexpected):
-			// Given internal parser & lexer validation, this branch should be near-impossible to reach.
-			cold_path();
-			panic!("Identifiers must be non-empty and consist only of ASCII characters!");
-		};
-		macro_rules! bx {
-			($ty:expr) => {
-				Box::new($ty)
-			};
-		}
-		// SANITY(ptr) + SAFETY: `identifier` is a non-empty ASCII string slice.
-		let integer_is_unsigned: bool = unsafe { *identifier.as_ptr() } == b'u';
-		match identifier {
-			"void" => bx!(__Void::instance()),
-			"bool" => bx!(__Boolean::instance()),
-			"u8" | "i8" => bx!(__8BitInteger::new(integer_is_unsigned)),
-			"u16" | "i16" => bx!(__16BitInteger::new(integer_is_unsigned)),
-			"u32" | "i32" => bx!(__32BitInteger::new(integer_is_unsigned)),
-			"u64" | "i64" => bx!(__64BitInteger::new(integer_is_unsigned)),
-			"u128" | "i128" => bx!(__128BitInteger::new(integer_is_unsigned)),
-			"f16" => bx!(__16BitFloatingPoint::instance()),
-			"b16" => bx!(__16BitBrainFloatingPoint::instance()),
-			"f32" => bx!(__32BitFloatingPoint::instance()),
-			"f64" => bx!(__64BitFloatingPoint::instance()),
-			"f128" => bx!(__128BitFloatingPoint::instance()),
-			_ => todo!("Custom type lookup"),
-		}
+pub struct Parser<'src> {
+	lexer: Lexer<'src>,
+}
+
+const impl<'src> From<Lexer<'src>> for Parser<'src> {
+	fn from(value: Lexer<'src>) -> Self {
+		Self::new(value)
 	}
 }
 
-impl<'a> Parser<'a> {
-	#[must_use]
-	pub const fn new(lexer: Lexer<'a>) -> Self {
-		Self { lexer }
+const impl<'src> From<Source<'src>> for Parser<'src> {
+	fn from(value: Source<'src>) -> Self {
+		Self::new(value.into())
 	}
+}
 
-	// Implementing the `From` trait is being weird.
+impl<'src> Parser<'src> {
 	#[must_use]
-	pub fn from(src: Src<'a>) -> Self {
-		Self::new(Lexer::new(src))
+	pub const fn new(lexer: Lexer<'src>) -> Self {
+		Self { lexer }
 	}
 
 	pub fn parse(&mut self) -> Result<TopLevel> {
@@ -345,10 +295,9 @@ impl<'a> Parser<'a> {
 		// Eat 'funct'.
 		expect_token!(self.lexer.read_token()?, Token::Function);
 		let token: Token = self.lexer.read_token()?;
-		let Token::Identifier(mut identifier): Token = token else {
+		let Token::Identifier(identifier): Token = token else {
 			bail!(UnexpectedTokenError { unexpected: token });
 		};
-		identifier.push('\0');
 		let parameters: Vec<(String, Box<dyn __Type>)> = self.parse_function_parameters()?;
 		let return_type: Box<dyn __Type> = if *self.lexer.peek_token()? == Token::Colon {
 			// Eat ':'.
@@ -361,13 +310,8 @@ impl<'a> Parser<'a> {
 		} else {
 			Box::new(__Void::instance())
 		};
-		let declaration: FunctionDeclaration = FunctionDeclaration {
-			modifiers,
-			attributes,
-			identifier,
-			parameters,
-			return_type,
-		};
+		let declaration: FunctionDeclaration =
+			FunctionDeclaration::new(modifiers, attributes, identifier, parameters, return_type);
 		Ok(TopLevel::Function(declaration))
 	}
 
@@ -377,6 +321,8 @@ impl<'a> Parser<'a> {
 
 		// SANITY(fast-path): Immediate return if the next token is ')'.
 		if *self.lexer.peek_token()? == Token::CloseBracket {
+			// Eat ')'.
+			let _ = self.lexer.read_token();
 			return Ok(Vec::new());
 		};
 		todo!()
@@ -481,28 +427,13 @@ impl<'a> Parser<'a> {
 	}
 
 	/// Shorthand to prevent cloning the body of [`Token::Identifier`] on a peek match.
-	///
-	/// # Safety
-	///
-	/// This function is _only_ safe to call if the previously [`peeked`][`Lexer::peek_token`] token was [`Token::Identifier`].
-	///
-	/// Calling this in any other case is Undefined Behaviour.
-	///
-	/// Callers are responsible for upholding the contract as specified.
-	pub unsafe fn take_identifier(&mut self) -> String {
+	pub fn take_identifier(&mut self) -> String {
 		let Ok(Token::Identifier(identifier)): Result<Token> = self.lexer.read_token() else {
 			// SANITY(unreachable):
 			// `Lexer` caches the last peeked token and returns it on next read.
 			// This means that a subsequent call to `Lexer::read_token()` after a call to `Lexer::peek_token()` will always return the same value.
 			// No actual I/O operations occur during the subsequent call, thus errors are also impossible.
-			// SAFETY:
-			// Problem(s):
-			// - `unreachable_unchecked()` is unsafe, and it is Undefined Behaviour for it to be reached.
-			// Excuse(s):
-			// - This statement cannot be reached.
-			unsafe {
-				unreachable_unchecked();
-			};
+			suggest_unreachable!();
 		};
 		identifier
 	}
@@ -512,8 +443,7 @@ impl<'a> Parser<'a> {
 			return self.parse_primary_expr();
 		};
 		// SANITY(unusual): This is cheaper than calling `<&String>::to_owned` to duplicate the reference from peeking.
-		// SAFETY: The code above this line confirms that the next token will be `Token::Identifier`.
-		let identifier: String = unsafe { self.take_identifier() };
+		let identifier: String = self.take_identifier();
 
 		// SANITY(unusual): Hack to get variable references because of limitations with lexer peeking.
 		if *self.lexer.peek_token()? != Token::OpenBracket {
@@ -530,7 +460,8 @@ impl<'a> Parser<'a> {
 			return Ok(Expr::FunctionCall(identifier, Vec::new()));
 		};
 
-		let mut parameters: Vec<Expr> = Vec::with_capacity(4);
+		let mut parameters: Vec<Expr> =
+			Vec::with_capacity(const_num_env!("__PARAM_BUF_CAPACITY", 4));
 		loop {
 			parameters.push(self.parse_primary_expr()?);
 			let token: Token = self.lexer.read_token()?;
@@ -613,7 +544,7 @@ impl<'a> Parser<'a> {
 		Ok(stmt)
 	}
 
-	fn peek_identifier_or_bail(&mut self) -> Result<()> {
+	fn peek_identifier_or_bail(&mut self) -> Result<String> {
 		let Token::Identifier(_): Token = *self.lexer.peek_token()? else {
 			bail!(UnexpectedTokenError {
 				unexpected: self
@@ -622,7 +553,8 @@ impl<'a> Parser<'a> {
 					.expect("Unreachable panic, this read is cached."),
 			});
 		};
-		Ok(())
+		// SANITY(unusual): This is cheaper than calling `<&String>::to_owned` to duplicate the reference from peeking.
+		Ok(self.take_identifier())
 	}
 
 	pub fn parse_variable_stmt(&mut self) -> Result<Stmt> {
@@ -636,48 +568,28 @@ impl<'a> Parser<'a> {
 		};
 		// Eat 'val'.
 		let _ = self.lexer.read_token();
-		self.peek_identifier_or_bail()?;
-		let identifier: String;
-		let assignment: Option<Expr> = if self.lexer.peek_token()? == &Token::Semicolon {
-			// SANITY(unusual): This is cheaper than calling `<&String>::to_owned` to duplicate the reference from peeking.
-			// SAFETY: The above check ensures the next token will be `Token::Identifier`.
-			identifier = unsafe { self.take_identifier() };
+		let identifier: String = self.peek_identifier_or_bail()?;
+		let assignment: Option<Expr> = if *self.lexer.peek_token()? == Token::Semicolon {
 			None
 		} else {
-			let Stmt::Assignment(ident, expr): Stmt = self.parse_assignment_stmt()? else {
-				// SANITY(unreachable): The matched function always returns `Stmt::Assignment`.
-				// SAFETY:
-				// Problem(s):
-				// - `unreachable_unchecked()` is unsafe, and it is Undefined Behaviour for it to be reached.
-				// Excuse(s):
-				// - This statement cannot be reached.
-				unsafe {
-					unreachable_unchecked();
-				};
+			// Eat '='.
+			expect_token!(self.lexer.read_token()?, Token::Equals);
+			let Stmt::Unit(expr): Stmt = self.parse_unit_stmt()? else {
+				// SANITY(unreachable): The matched function always returns `Stmt::Unit`.
+				suggest_unreachable!();
 			};
-			identifier = ident;
 			Some(expr)
 		};
 		Ok(Stmt::Variable(identifier, assignment))
 	}
 
 	pub fn parse_assignment_stmt(&mut self) -> Result<Stmt> {
-		self.peek_identifier_or_bail()?;
-		// SANITY(unusual): This is cheaper than calling `<&String>::to_owned` to duplicate the reference from peeking.
-		// SAFETY: The above check ensures the next token will be `Token::Identifier`.
-		let identifier: String = unsafe { self.take_identifier() };
+		let identifier: String = self.peek_identifier_or_bail()?;
 		// Eat '='.
 		expect_token!(self.lexer.read_token()?, Token::Equals);
 		let Stmt::Unit(expr): Stmt = self.parse_unit_stmt()? else {
 			// SANITY(unreachable): The matched function always returns `Stmt::Unit`.
-			// SAFETY:
-			// Problem(s):
-			// - `unreachable_unchecked()` is unsafe, and it is Undefined Behaviour for it to be reached.
-			// Excuse(s):
-			// - This statement cannot be reached.
-			unsafe {
-				unreachable_unchecked();
-			};
+			suggest_unreachable!();
 		};
 		Ok(Stmt::Assignment(identifier, expr))
 	}
@@ -687,6 +599,42 @@ impl<'a> Parser<'a> {
 		// Eat ';'.
 		expect_token!(self.lexer.read_token()?, Token::Semicolon);
 		Ok(Stmt::Unit(expr))
+	}
+}
+
+impl Parser<'_> {
+	#[must_use]
+	pub fn type_by_name(&self, identifier: &str) -> Box<dyn __Type> {
+		#[expect(clippy::panic)]
+		if identifier.is_empty() || !identifier.is_ascii() {
+			// SANITY(unexpected):
+			// Given internal parser & lexer validation, this branch should be near-impossible to reach.
+			cold_path();
+			panic!("Identifiers must be non-empty and consist only of ASCII characters!");
+		};
+		macro_rules! bx {
+			($ty:expr) => {
+				Box::new($ty)
+			};
+		}
+		// SANITY(ptr) + SAFETY: `identifier` is a non-empty ASCII string slice.
+		let integer_is_unsigned: bool = unsafe { *identifier.as_ptr() } == b'u';
+		match identifier {
+			"void" => bx!(__Void::instance()),
+			"bool" => bx!(__Boolean::instance()),
+			"u8" | "i8" => bx!(__8BitInteger::new(integer_is_unsigned)),
+			"u16" | "i16" => bx!(__16BitInteger::new(integer_is_unsigned)),
+			"u32" | "i32" => bx!(__32BitInteger::new(integer_is_unsigned)),
+			"u64" | "i64" => bx!(__64BitInteger::new(integer_is_unsigned)),
+			"u128" | "i128" => bx!(__128BitInteger::new(integer_is_unsigned)),
+			"usize" | "isize" => bx!(__Size::new(integer_is_unsigned)),
+			"f16" => bx!(__16BitFloatingPoint::instance()),
+			"b16" => bx!(__16BitBrainFloatingPoint::instance()),
+			"f32" => bx!(__32BitFloatingPoint::instance()),
+			"f64" => bx!(__64BitFloatingPoint::instance()),
+			"f128" => bx!(__128BitFloatingPoint::instance()),
+			_ => todo!("Custom type lookup"),
+		}
 	}
 }
 

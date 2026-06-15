@@ -73,30 +73,26 @@ impl __Type for Box<dyn __Type> {
 	}
 }
 
-#[derive(Debug)]
-pub struct __Void;
-
-impl __Void {
-	#[must_use]
-	pub const fn instance() -> Self {
-		Self
-	}
-}
-
-crate::simple_type_impl!(__Void, void_type);
+crate::zst_singleton!(__Void, void_type);
+crate::zst_singleton!(__Boolean, bool_type);
 
 // https://doc.rust-lang.org/nomicon/exotic-sizes.html#zero-sized-types-zsts
-#[derive(Debug)]
-pub struct __Boolean;
+#[macro_export]
+macro_rules! zst_singleton {
+	($__type:ident, $type_fn:ident $(,)?) => {
+		#[derive(Debug)]
+		#[must_use]
+		pub struct $__type;
 
-impl __Boolean {
-	#[must_use]
-	pub const fn instance() -> Self {
-		Self
-	}
+		impl $__type {
+			pub const fn instance() -> Self {
+				Self
+			}
+		}
+
+		$crate::simple_type_impl!($__type, $type_fn);
+	};
 }
-
-crate::simple_type_impl!(__Boolean, bool_type);
 
 #[macro_export]
 macro_rules! simple_type_impl {
