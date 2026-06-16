@@ -10,7 +10,7 @@ pub type LLVMType<'ctx> = AnyTypeEnum<'ctx>;
 
 #[macro_export]
 macro_rules! map_llvm_type {
-	($($valid:ident),*; $input:expr $(,)?) => {
+	($input:expr; $($valid:ident),* $(,)?) => {
 		match $input {
 			$(inkwell::types::AnyTypeEnum::$valid(inner) => inner.into(),)*
 			other => panic!("Unexpected or invalid type '{other}'!"),
@@ -50,7 +50,7 @@ impl<'ctx> LLVMTypeExt<'ctx> for LLVMType<'ctx> {
 pub trait __Type: Debug {
 	fn provide_llvm_type<'ctx>(&self, context: &'ctx Context) -> LLVMType<'ctx>;
 
-	fn dbg_info(&self) -> String;
+	fn dbg_info(&self) -> &str;
 }
 
 impl __Type for &dyn __Type {
@@ -58,7 +58,7 @@ impl __Type for &dyn __Type {
 		(*self).provide_llvm_type(context)
 	}
 
-	fn dbg_info(&self) -> String {
+	fn dbg_info(&self) -> &str {
 		(*self).dbg_info()
 	}
 }
@@ -68,7 +68,7 @@ impl __Type for Box<dyn __Type> {
 		(**self).provide_llvm_type(context)
 	}
 
-	fn dbg_info(&self) -> String {
+	fn dbg_info(&self) -> &str {
 		(**self).dbg_info()
 	}
 }
@@ -106,8 +106,8 @@ macro_rules! simple_type_impl {
 				context.$type_fn().into()
 			}
 
-			fn dbg_info(&self) -> String {
-				String::from(stringify!($__type))
+			fn dbg_info(&self) -> &'static str {
+				stringify!($__type)
 			}
 		}
 	};

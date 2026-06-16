@@ -80,22 +80,6 @@ integer_type!(__16BitInteger, 16, Some(i16_type));
 integer_type!(__32BitInteger, 32, Some(i32_type));
 integer_type!(__64BitInteger, 64, Some(i64_type));
 integer_type!(__128BitInteger, 128, None);
-
-// RustRover doesn't understand `cfg_select!` >.>
-
-#[cfg(target_pointer_width = "64")]
-pub type __Size = __64BitInteger;
-#[cfg(target_pointer_width = "32")]
-pub type __Size = __32BitInteger;
-#[cfg(target_pointer_width = "16")]
-pub type __Size = __16BitInteger;
-#[cfg(all(
-	not(target_pointer_width = "64"),
-	not(target_pointer_width = "32"),
-	not(target_pointer_width = "16"),
-))]
-compile_error!("Unsupported host!");
-
 impl __Type for __128BitInteger {
 	// FIXME: `Context` doesn't (currently) use `LLVMInt128TypeInContext()` under the hood.  Instead they use a custom-width integer type.  Awaiting fix.
 	fn provide_llvm_type<'ctx>(&self, context: &'ctx Context) -> LLVMType<'ctx> {
@@ -114,7 +98,22 @@ impl __Type for __128BitInteger {
 		result.into()
 	}
 
-	fn dbg_info(&self) -> String {
-		String::from("__128BitInteger")
+	fn dbg_info(&self) -> &'static str {
+		"__128BitInteger"
 	}
 }
+
+// RustRover doesn't understand `cfg_select!` >.>
+
+#[cfg(target_pointer_width = "64")]
+pub type __Size = __64BitInteger;
+#[cfg(target_pointer_width = "32")]
+pub type __Size = __32BitInteger;
+#[cfg(target_pointer_width = "16")]
+pub type __Size = __16BitInteger;
+#[cfg(all(
+	not(target_pointer_width = "64"),
+	not(target_pointer_width = "32"),
+	not(target_pointer_width = "16"),
+))]
+compile_error!("Unsupported host!");

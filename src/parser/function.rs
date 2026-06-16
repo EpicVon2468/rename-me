@@ -43,8 +43,8 @@ impl FunctionDeclaration {
 	}
 
 	#[must_use]
-	pub fn identifier(&self) -> &str {
-		&self.identifier
+	pub const fn identifier(&self) -> &str {
+		self.identifier.as_str()
 	}
 
 	#[must_use]

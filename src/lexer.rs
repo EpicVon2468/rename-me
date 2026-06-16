@@ -1,11 +1,10 @@
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::hint::{cold_path, unreachable_unchecked};
+use std::hint::{assert_unchecked, cold_path, unreachable_unchecked};
 use std::io::{Error as IOError, Read};
-use std::str::Utf8Error;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{anyhow, bail, Result};
 
 use crate::const_num_env;
 
@@ -224,7 +223,9 @@ impl<'src> Lexer<'src> {
 			'=' => Token::Equals,
 			'!' => Token::ExclamationMark,
 			'#' => Token::Hash,
-			other => bail!("Unrecognised character input '{other}'!"),
+			other => bail!(
+				"Unrecognised character input {other:?} ('{other}')!  (Was there invalid UTF-8 input?)",
+			),
 		})
 	}
 
@@ -362,41 +363,22 @@ impl<'src> Lexer<'src> {
 			bail!(ReadError::ZeroLengthByte(initial));
 		};
 
-		#[expect(
-			clippy::as_conversions,
-			reason = "False positive.  These casts are directly equivalent to `usize::from(_)`."
-		)]
-		let len: usize = {
-			// SANITY(unusual):
-			// 192 is subtracted because the value is always >= 192 at this point.
-			// This means space can be saved by stripping the first 192 entries.
-			// SAFETY:
-			// Problem(s):
-			// - `u8::unchecked_sub()` can underflow or overflow.
-			// Excuse(s):
-			// - The amount being subtracted is a trusted constant value (192).
-			// - The value of `initial` is always >= 192 at this point, meaning subtracting 192 is always safe.
-			let index: usize = unsafe { initial.unchecked_sub(192) } as usize;
-
-			// Determine UTF-8 byte length for a multibyte char.
-			// SANITY(unusual): Cheaper to store 128 `u8`s and convert at use-site than to store 128 `usize`s.
-			let len: usize = UTF8_CHAR_WIDTH[index] as usize;
-			if len == 0 {
-				bail!(ReadError::ZeroLengthByte(initial));
-			};
-			len
-		};
+		// SAFETY: `initial` is always >= 192 at this point (see above).
+		let len: usize = unsafe { utf8_width(initial)? };
 
 		let mut buf: Vec<u8> = vec![0; len];
 		buf[0] = initial;
 		self.read(&mut buf[1..])?;
 
-		// TODO: Could use `buf.utf8_chunks().next()`...
-		// SANITY(unusual): There doesn't appear to be any other way to make a `char` from a `u8` slice than this.
-		let string: &str = match str::from_utf8(&buf) {
-			Ok(result) => result,
-			Err(error) => bail!(ReadError::InvalidByteSequence(Some(error), buf)),
+		// SAFETY: `initial` is always >= 192 at this point (see above).
+		unsafe {
+			if let Err(error) = validate_utf8_char(&buf) {
+				bail!(error.context(ReadError::InvalidByteSequence(buf)));
+			};
 		};
+		// SANITY(unusual): There doesn't appear to be any other way to make a `char` from a `u8` slice than this.
+		// SAFETY: `buf` is validated above.
+		let string: &str = unsafe { str::from_utf8_unchecked(&buf) };
 		let Some(result): Option<char> = string.chars().next() else {
 			// SANITY(unreachable): If `len` was 0, the enclosing function would've `bail!()`'d before this point.
 			// SAFETY:
@@ -417,7 +399,7 @@ pub enum ReadError {
 	ForwardedIOError(IOError),
 	DisallowedASCIIChar(u8),
 	ZeroLengthByte(u8),
-	InvalidByteSequence(Option<Utf8Error>, Vec<u8>),
+	InvalidByteSequence(Vec<u8>),
 }
 
 impl Display for ReadError {
@@ -435,7 +417,7 @@ impl Display for ReadError {
 				destination,
 				"Invalid UTF-8 byte with length of 0 appeared!  Byte (in decimal) was: '{byte}'!",
 			),
-			Self::InvalidByteSequence(_, ref sequence) => write!(
+			Self::InvalidByteSequence(ref sequence) => write!(
 				destination,
 				"Invalid UTF-8 byte sequence!  Sequence (in decimal(s)) was '{sequence:?}'!",
 			),
@@ -447,9 +429,6 @@ impl Error for ReadError {
 	fn source(&self) -> Option<&(dyn Error + 'static)> {
 		match *self {
 			Self::ForwardedIOError(ref source) => Some(source),
-			Self::InvalidByteSequence(ref source, _) => source
-				.as_ref()
-				.map::<&(dyn Error + 'static), _>(|error: &Utf8Error| error),
 			_ => None,
 		}
 	}
@@ -487,7 +466,7 @@ static DISALLOWED_ASCII_CHARS: [u8; 27] = [
 
 // SANITY(overhead + unusual):
 // Copied from `core`'s str internals, w/o the first 192 entries.
-// Cheaper to store 192 `u8`s and convert at use-site than to store 192 `usize`s.
+// Cheaper to store 64 `u8`s and convert at use-site than to store 64 `usize`s.
 // The first 128 entries (which were all 1) were stripped out, as the only use of this value is non-ASCII.
 // The next 64 entries (which were all 0) were also stripped out.
 // https://tools.ietf.org/html/rfc3629
@@ -498,3 +477,107 @@ static UTF8_CHAR_WIDTH: [u8; 64] = [
 	3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, // E
 	4, 4, 4, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // F
 ];
+
+/// # Safety
+///
+/// Callers must ensure that `initial >= 192`.
+#[expect(
+	clippy::as_conversions,
+	reason = "False positive.  These casts are directly equivalent to `usize::from(_)`."
+)]
+unsafe fn utf8_width(initial: u8) -> Result<usize> {
+	debug_assert!(initial >= 192);
+	// SAFETY: Callers uphold the contract of `initial` being >= 192.
+	unsafe {
+		assert_unchecked(initial >= 192);
+	};
+	// SANITY(unusual):
+	// 192 subtracted because the value is always >= 192 at this point.
+	// This means space can be saved by stripping the first 192 entries.
+	// SAFETY:
+	// Problem(s):
+	// - `u8::unchecked_sub()` can underflow or overflow.
+	// Excuse(s):
+	// - The amount being subtracted is a trusted constant value (192).
+	// - The value of `initial` is always >= 192 at this point, meaning subtracting 192 is always safe.
+	let index: usize = unsafe { initial.unchecked_sub(192) } as usize;
+
+	// Determine UTF-8 byte length for a multibyte char.
+	// SANITY(unusual): Cheaper to store 64 `u8`s and convert at use-site than to store 64 `usize`s.
+	let len: usize = UTF8_CHAR_WIDTH[index] as usize;
+	if len == 0 {
+		bail!(ReadError::ZeroLengthByte(initial));
+	};
+	Ok(len)
+}
+
+// Copied (& slightly modified) from `core` str internals.  Credit to them for the wizardry of this function.
+/// # Safety
+#[expect(
+	clippy::cast_possible_wrap,
+	clippy::as_conversions,
+	clippy::unnested_or_patterns,
+	reason = "Semantic preservation."
+)]
+unsafe fn validate_utf8_char(char_bytes: &[u8]) -> Result<()> {
+	let mut index: usize = 0;
+	let len: usize = char_bytes.len();
+	macro_rules! err {
+		($num:literal $(,)?) => {{
+			bail!(format!(
+				concat!("Invalid bytes (index was {})!  Error length is ", $num, '!',),
+				index,
+			));
+		}};
+	}
+
+	macro_rules! next {
+		() => {{
+			index += 1;
+			if index >= len {
+				bail!("Expected more bytes, found none!");
+			};
+			char_bytes[index]
+		}};
+	}
+
+	let first: u8 = char_bytes[index];
+	// SAFETY: `first` is always >= 192.
+	match unsafe { utf8_width(first)? } {
+		2 => {
+			if next!() as i8 >= -64 {
+				err!(1);
+			};
+		},
+		3 => {
+			match (first, next!()) {
+				(0xE0, 0xA0..=0xBF)
+				| (0xE1..=0xEC, 0x80..=0xBF)
+				| (0xED, 0x80..=0x9F)
+				| (0xEE..=0xEF, 0x80..=0xBF) => {},
+				_ => err!(1),
+			};
+			if next!() as i8 >= -64 {
+				err!(2);
+			};
+		},
+		4 => {
+			match (first, next!()) {
+				(0xF0, 0x90..=0xBF) | (0xF1..=0xF3, 0x80..=0xBF) | (0xF4, 0x80..=0x8F) => {},
+				_ => err!(1),
+			};
+			if next!() as i8 >= -64 {
+				err!(2);
+			};
+			if next!() as i8 >= -64 {
+				err!(3);
+			};
+		},
+		_ => err!(1),
+	};
+	index += 1;
+	if index < len {
+		bail!("Trailing bytes found!");
+	};
+	Ok(())
+}

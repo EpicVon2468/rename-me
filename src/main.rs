@@ -73,9 +73,10 @@ pub mod types;
 use anyhow::Result;
 
 use inkwell::support::{enable_llvm_pretty_stack_trace, get_llvm_version, shutdown_llvm};
-use parser::function::FunctionDeclaration;
+
 use crate::codegen::CodeGen;
 use crate::lexer::Source;
+use crate::parser::function::FunctionDeclaration;
 use crate::parser::{Parser, TopLevel};
 
 #[macro_export]

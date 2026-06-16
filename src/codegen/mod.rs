@@ -4,11 +4,10 @@ use inkwell::attributes::AttributeLoc;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
-use inkwell::types::{AsTypeRef as _, BasicMetadataTypeEnum, FunctionType};
+use inkwell::types::{BasicMetadataTypeEnum, FunctionType};
 use inkwell::values::FunctionValue;
 
 use crate::map_llvm_type;
-use crate::parser::function::FunctionDeclaration;
 use crate::parser::fn_attrs::{
 	Attributes,
 	is_cold,
@@ -17,6 +16,7 @@ use crate::parser::fn_attrs::{
 	is_strictfp,
 	is_try_inline,
 };
+use crate::parser::function::FunctionDeclaration;
 use crate::parser::modifiers::{Modifiers, is_external, is_private};
 use crate::types::{__Type, LLVMType, LLVMTypeExt as _};
 
@@ -51,10 +51,13 @@ impl<'ctx> CodeGen<'ctx> {
 
 	/// # Safety
 	///
-	/// Lifetimes, amirite?
-	pub unsafe fn create_function(&self, function: &FunctionDeclaration) {
+	/// Callers must ensure that `'funct` does not live longer than `'ctx`.
+	pub unsafe fn create_function<'funct>(&'funct self, parsed: &FunctionDeclaration)
+	where
+		// 'ctx >= 'funct
+		'ctx: 'funct, {
 		let linkage: Option<Linkage> = {
-			let modifiers: Modifiers = function.modifiers();
+			let modifiers: Modifiers = parsed.modifiers();
 			if is_external(modifiers) {
 				Some(Linkage::External)
 			} else if is_private(modifiers) {
@@ -63,70 +66,47 @@ impl<'ctx> CodeGen<'ctx> {
 				None
 			}
 		};
-		let raw_type: LLVMType = function.return_type().provide_llvm_type(&self.context);
-		let parameter_types: Vec<BasicMetadataTypeEnum> = function.parameters().iter().map(|entry: &(_, Box<dyn __Type>)| {
-			let type_enum: LLVMType = entry.1.provide_llvm_type(&self.context);
-			let mapped: BasicMetadataTypeEnum = map_llvm_type!(ArrayType, FloatType, IntType, PointerType, StructType, VectorType, ScalableVectorType; type_enum);
+		let return_type: LLVMType<'funct> = parsed.return_type().provide_llvm_type(&self.context);
+		let parameter_types: Vec<BasicMetadataTypeEnum<'funct>> = parsed.parameters().iter().map(|entry: &(_, Box<dyn __Type>)| {
+			let type_enum: LLVMType<'funct> = entry.1.provide_llvm_type(&self.context);
+			let mapped: BasicMetadataTypeEnum<'funct> = map_llvm_type!(type_enum; ArrayType, FloatType, IntType, PointerType, StructType, VectorType, ScalableVectorType);
 			mapped
 		}).collect();
-		let function_type: FunctionType = raw_type.fn_type_ext(&parameter_types, false);
+		let ty: FunctionType<'funct> = return_type.fn_type_ext(&parameter_types, false);
 
-		// SANITY(unsound + unusual + what-the-fuck) + SAFETY:
+		// SAFETY:
 		// Problem(s):
 		// - The value created here can outlive `self` and cause a use-after-free or other Undefined Behaviour.
 		// Excuse(s):
 		// - Neither references nor ownership of values created here shall be exposed outside `self` at any point for any reason.
 		// - This ensures that when `self` is dropped, all dangling references and values are dropped as well.
-		let value: FunctionValue<'ctx> = {
-			use inkwell::llvm_sys::core::LLVMAddFunction;
-			use inkwell::llvm_sys::prelude::LLVMValueRef;
-
-			// SAFETY:
-			// Problem(s):
-			// - This is unsound and can cause Undefined Behaviour (see above).
-			// Excuse(s):
-			// - See above.
-			let result: LLVMValueRef = unsafe {
-				LLVMAddFunction(
-					self.module.as_mut_ptr(),
-					// SAFETY: `Parser` appends a null byte termination to the identifier.
-					function.identifier().as_ptr().cast(),
-					function_type.as_type_ref(),
-				)
-			};
-			// SAFETY:
-			// Problem(s):
-			// - This is unsound and can cause Undefined Behaviour (see above).
-			// Excuse(s):
-			// - See above.
-			unsafe { FunctionValue::new(result) }.unwrap()
+		let module: &'funct Module<'funct> = unsafe {
+			std::mem::transmute::<&'funct Module<'ctx>, &'funct Module<'funct>>(&self.module)
 		};
-		if let Some(linkage) = linkage {
-			value.set_linkage(linkage);
-		};
+		let value: FunctionValue<'funct> = module.add_function(parsed.identifier(), ty, linkage);
 		{
-			let attrs: Attributes = function.attributes();
+			let attributes: Attributes = parsed.attributes();
 			macro_rules! add_function_attr {
 				($attr:literal) => {
 					value.add_attribute(
 						AttributeLoc::Function,
 						self.context.create_string_attribute($attr, ""),
 					);
-				};
+				}
 			}
-			if is_cold(attrs) {
+			if is_cold(attributes) {
 				add_function_attr!("cold");
 			};
-			if is_hot(attrs) {
+			if is_hot(attributes) {
 				add_function_attr!("hot");
 			};
-			if is_strictfp(attrs) {
+			if is_strictfp(attributes) {
 				add_function_attr!("strictfp");
 			};
-			if is_try_inline(attrs) {
+			if is_try_inline(attributes) {
 				add_function_attr!("inlinehint");
 			};
-			if is_force_inline(attrs) {
+			if is_force_inline(attributes) {
 				add_function_attr!("alwaysinline");
 			};
 		};
