@@ -4,7 +4,7 @@ pub mod integers;
 use std::fmt::Debug;
 
 use inkwell::context::Context;
-use inkwell::types::{AnyTypeEnum, BasicMetadataTypeEnum, FunctionType};
+use inkwell::types::AnyTypeEnum;
 
 pub type LLVMType<'ctx> = AnyTypeEnum<'ctx>;
 
@@ -12,39 +12,10 @@ pub type LLVMType<'ctx> = AnyTypeEnum<'ctx>;
 macro_rules! map_llvm_type {
 	($input:expr; $($valid:ident),* $(,)?) => {
 		match $input {
-			$(inkwell::types::AnyTypeEnum::$valid(inner) => inner.into(),)*
-			other => panic!("Unexpected or invalid type '{other}'!"),
+			$(LLVMType::$valid(inner) => inner.into(),)*
+			other => panic!("ICE: Unexpected or invalid type '{other}'!"),
 		}
 	};
-}
-
-pub trait LLVMTypeExt<'ctx> {
-	fn fn_type_ext(
-		self,
-		param_types: &[BasicMetadataTypeEnum<'ctx>],
-		is_var_args: bool,
-	) -> FunctionType<'ctx>;
-}
-
-impl<'ctx> LLVMTypeExt<'ctx> for LLVMType<'ctx> {
-	fn fn_type_ext(
-		self,
-		param_types: &[BasicMetadataTypeEnum<'ctx>],
-		is_var_args: bool,
-	) -> FunctionType<'ctx> {
-		match self {
-			AnyTypeEnum::ArrayType(inner) => inner.fn_type(param_types, is_var_args),
-			AnyTypeEnum::FloatType(inner) => inner.fn_type(param_types, is_var_args),
-			AnyTypeEnum::IntType(inner) => inner.fn_type(param_types, is_var_args),
-			AnyTypeEnum::PointerType(inner) => inner.fn_type(param_types, is_var_args),
-			AnyTypeEnum::StructType(inner) => inner.fn_type(param_types, is_var_args),
-			AnyTypeEnum::VectorType(inner) => inner.fn_type(param_types, is_var_args),
-			AnyTypeEnum::ScalableVectorType(inner) => inner.fn_type(param_types, is_var_args),
-			AnyTypeEnum::VoidType(inner) => inner.fn_type(param_types, is_var_args),
-			#[allow(clippy::panic)]
-			AnyTypeEnum::FunctionType(_) => panic!("Function type unexpectedly reached!"),
-		}
-	}
 }
 
 pub trait __Type: Debug {
@@ -97,6 +68,7 @@ macro_rules! zst_singleton {
 #[macro_export]
 macro_rules! simple_type_impl {
 	($__type:ty, $type_fn:ident $(,)?) => {
+		#[automatically_derived]
 		impl $crate::types::__Type for $__type {
 			#[inline(always)]
 			fn provide_llvm_type<'ctx>(

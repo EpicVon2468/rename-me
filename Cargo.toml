@@ -38,7 +38,7 @@ default-features = false
 
 [patch.crates-io]
 inkwell = {
-	git = "https://github.com/TheDan64/inkwell",
+	git = "https://github.com/EpicVon2468/inkwell",
 }
 
 # The profile that 'dist' will build with

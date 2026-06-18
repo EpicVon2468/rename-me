@@ -131,10 +131,7 @@ pub fn main() -> Result<()> {
 			println!("Loading with LLVM version {major}.{minor}.{patch}...");
 		};
 		let codegen: CodeGen = CodeGen::new("test");
-		// SAFETY:
-		unsafe {
-			codegen.create_function(&function);
-		};
+		codegen.create_function(&function);
 		codegen.debug();
 	};
 	// SAFETY:

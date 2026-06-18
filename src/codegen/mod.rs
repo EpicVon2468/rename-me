@@ -18,7 +18,7 @@ use crate::parser::fn_attrs::{
 };
 use crate::parser::function::FunctionDeclaration;
 use crate::parser::modifiers::{Modifiers, is_external, is_private};
-use crate::types::{__Type, LLVMType, LLVMTypeExt as _};
+use crate::types::{__Type, LLVMType};
 
 #[derive(Debug)]
 pub struct CodeGen<'ctx> {
@@ -31,6 +31,26 @@ pub struct CodeGen<'ctx> {
 	context: ManuallyDrop<Context>,
 	module: Module<'ctx>,
 	builder: Builder<'ctx>,
+}
+
+// Yes I know a separate impl is redundant, I just want it to be _very_ clear what I'm doing.
+impl<'long> CodeGen<'long> {
+	/// Returns [`Self`]'s LLVM module, with its [invariant lifetime] shortened from `'long` to `'short`.
+	///
+	/// # Safety
+	///
+	/// Callers must ensure that `'short` does not live longer than `'long`.
+	///
+	/// [invariant lifetime]: https://doc.rust-lang.org/nomicon/subtyping.html#variance
+	unsafe fn coerce_module<'short>(&'short self) -> &'short Module<'short>
+	where
+		// 'long >= 'short
+		'long: 'short, {
+		// SAFETY:
+		unsafe {
+			std::mem::transmute::<&'short Module<'long>, &'short Module<'short>>(&self.module)
+		}
+	}
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -49,10 +69,15 @@ impl<'ctx> CodeGen<'ctx> {
 		}
 	}
 
+	pub fn create_function(&self, parsed: &FunctionDeclaration) {
+		// SAFETY: The borrow lifetime here does not live longer than 'ctx.
+		unsafe { self.create_function_impl(parsed) };
+	}
+
 	/// # Safety
 	///
 	/// Callers must ensure that `'funct` does not live longer than `'ctx`.
-	pub unsafe fn create_function<'funct>(&'funct self, parsed: &FunctionDeclaration)
+	unsafe fn create_function_impl<'funct>(&'funct self, parsed: &FunctionDeclaration)
 	where
 		// 'ctx >= 'funct
 		'ctx: 'funct, {
@@ -68,21 +93,12 @@ impl<'ctx> CodeGen<'ctx> {
 		};
 		let return_type: LLVMType<'funct> = parsed.return_type().provide_llvm_type(&self.context);
 		let parameter_types: Vec<BasicMetadataTypeEnum<'funct>> = parsed.parameters().iter().map(|entry: &(_, Box<dyn __Type>)| {
-			let type_enum: LLVMType<'funct> = entry.1.provide_llvm_type(&self.context);
-			let mapped: BasicMetadataTypeEnum<'funct> = map_llvm_type!(type_enum; ArrayType, FloatType, IntType, PointerType, StructType, VectorType, ScalableVectorType);
-			mapped
+			map_llvm_type!(entry.1.provide_llvm_type(&self.context); ArrayType, FloatType, IntType, PointerType, StructType, VectorType, ScalableVectorType)
 		}).collect();
-		let ty: FunctionType<'funct> = return_type.fn_type_ext(&parameter_types, false);
+		let ty: FunctionType<'funct> = return_type.fn_type(&parameter_types, false).unwrap();
 
-		// SAFETY:
-		// Problem(s):
-		// - The value created here can outlive `self` and cause a use-after-free or other Undefined Behaviour.
-		// Excuse(s):
-		// - Neither references nor ownership of values created here shall be exposed outside `self` at any point for any reason.
-		// - This ensures that when `self` is dropped, all dangling references and values are dropped as well.
-		let module: &'funct Module<'funct> = unsafe {
-			std::mem::transmute::<&'funct Module<'ctx>, &'funct Module<'funct>>(&self.module)
-		};
+		// SAFETY: Callers ensure 'funct <= 'ctx.
+		let module: &'funct Module<'funct> = unsafe { self.coerce_module() };
 		let value: FunctionValue<'funct> = module.add_function(parsed.identifier(), ty, linkage);
 		{
 			let attributes: Attributes = parsed.attributes();
@@ -92,7 +108,7 @@ impl<'ctx> CodeGen<'ctx> {
 						AttributeLoc::Function,
 						self.context.create_string_attribute($attr, ""),
 					);
-				}
+				};
 			}
 			if is_cold(attributes) {
 				add_function_attr!("cold");
@@ -110,7 +126,6 @@ impl<'ctx> CodeGen<'ctx> {
 				add_function_attr!("alwaysinline");
 			};
 		};
-		value.print_to_stderr();
 	}
 
 	pub fn debug(&self) {
