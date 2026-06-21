@@ -9,6 +9,16 @@ use inkwell::types::AnyTypeEnum;
 pub type LLVMType<'ctx> = AnyTypeEnum<'ctx>;
 
 #[macro_export]
+macro_rules! map_llvm_type_to_metadata {
+	($input:expr) => {{
+		use inkwell::types::BasicMetadataTypeEnum;
+
+		let result: BasicMetadataTypeEnum<'_> = $crate::map_llvm_type!($input; ArrayType, FloatType, IntType, PointerType, StructType, VectorType, ScalableVectorType);
+		result
+	}};
+}
+
+#[macro_export]
 macro_rules! map_llvm_type {
 	($input:expr; $($valid:ident),* $(,)?) => {
 		match $input {
@@ -18,29 +28,21 @@ macro_rules! map_llvm_type {
 	};
 }
 
-pub trait __Type: Debug {
-	fn provide_llvm_type<'ctx>(&self, context: &'ctx Context) -> LLVMType<'ctx>;
+pub type __Type = Box<dyn AsLLVMType>;
 
-	fn dbg_info(&self) -> &str;
+pub const trait AsLLVMType: Debug {
+	fn as_llvm_type<'ctx>(&self, context: &'ctx Context) -> LLVMType<'ctx>;
 }
 
-impl __Type for &dyn __Type {
-	fn provide_llvm_type<'ctx>(&self, context: &'ctx Context) -> LLVMType<'ctx> {
-		(*self).provide_llvm_type(context)
-	}
-
-	fn dbg_info(&self) -> &str {
-		(*self).dbg_info()
+impl AsLLVMType for &dyn AsLLVMType {
+	fn as_llvm_type<'ctx>(&self, context: &'ctx Context) -> LLVMType<'ctx> {
+		(*self).as_llvm_type(context)
 	}
 }
 
-impl __Type for Box<dyn __Type> {
-	fn provide_llvm_type<'ctx>(&self, context: &'ctx Context) -> LLVMType<'ctx> {
-		(**self).provide_llvm_type(context)
-	}
-
-	fn dbg_info(&self) -> &str {
-		(**self).dbg_info()
+impl AsLLVMType for __Type {
+	fn as_llvm_type<'ctx>(&self, context: &'ctx Context) -> LLVMType<'ctx> {
+		(**self).as_llvm_type(context)
 	}
 }
 
@@ -50,12 +52,38 @@ crate::zst_singleton!(__Boolean, bool_type);
 // https://doc.rust-lang.org/nomicon/exotic-sizes.html#zero-sized-types-zsts
 #[macro_export]
 macro_rules! zst_singleton {
-	($__type:ident, $type_fn:ident $(,)?) => {
+	($__type:ident, $type_fn:ident $(,)? $(#[$attr:meta])*) => {
+		$(#[$attr])*
 		#[derive(Debug)]
 		#[must_use]
 		pub struct $__type;
 
+		#[automatically_derived]
+		const impl PartialEq for $__type {
+			#[inline(always)]
+			fn eq(&self, _: &Self) -> bool {
+				true
+			}
+			#[inline(always)]
+			fn ne(&self, _: &Self) -> bool {
+				false
+			}
+		}
+		#[automatically_derived]
+		const impl Eq for $__type {}
+
+		#[automatically_derived]
+		const impl Default for $__type {
+			#[doc = concat!("Delegates to [`", stringify!($__type), "::instance`].")]
+			#[inline(always)]
+			fn default() -> Self {
+				Self::instance()
+			}
+		}
+
 		impl $__type {
+			#[doc = concat!("Returns the singleton instance of [`", stringify!($__type), "`].")]
+			#[inline(always)]
 			pub const fn instance() -> Self {
 				Self
 			}
@@ -69,17 +97,13 @@ macro_rules! zst_singleton {
 macro_rules! simple_type_impl {
 	($__type:ty, $type_fn:ident $(,)?) => {
 		#[automatically_derived]
-		impl $crate::types::__Type for $__type {
+		impl $crate::types::AsLLVMType for $__type {
 			#[inline(always)]
-			fn provide_llvm_type<'ctx>(
+			fn as_llvm_type<'ctx>(
 				&self,
 				context: &'ctx inkwell::context::Context,
 			) -> $crate::types::LLVMType<'ctx> {
 				context.$type_fn().into()
-			}
-
-			fn dbg_info(&self) -> &'static str {
-				stringify!($__type)
 			}
 		}
 	};

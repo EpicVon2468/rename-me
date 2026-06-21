@@ -62,10 +62,13 @@
 	const_option_ops,
 	const_range,
 	const_result_trait_fn,
-	const_convert
+	const_convert,
+	const_default,
+	const_ops
 )]
 #![doc = include_str!("../README.md")]
 pub mod codegen;
+pub mod errors;
 pub mod lexer;
 pub mod parser;
 pub mod types;
@@ -80,10 +83,14 @@ use crate::parser::function::FunctionDeclaration;
 use crate::parser::{Parser, TopLevel};
 
 #[macro_export]
-macro_rules! suggest_unreachable {
-	($($arg:tt)*) => {{
+macro_rules! unreachable_ice {
+	($msg:expr, $src:ident $(,)?) => {{
+		use anyhow::{Error as Anyhow, anyhow, bail};
+
+		use $crate::errors::{ErrorSource, ICE};
+
 		std::hint::cold_path();
-		unreachable!($($arg,)*);
+		bail!(Anyhow::context(anyhow!($msg), ICE::new(ErrorSource::$src)));
 	}};
 }
 
@@ -96,17 +103,14 @@ macro_rules! const_num_env {
 				<usize as std::str::FromStr>::from_str(value).unwrap_or($default)
 			}
 			let value: usize = option_env!($env).map_or($default, mapper);
-			#[allow(clippy::as_conversions)]
-			{
-				assert!(
-					(0..=(isize::MAX as usize)).contains(&value),
-					concat!(
-						"Numeric environment variable '",
-						$env,
-						"' must be valid for allocation!",
-					),
-				);
-			};
+			assert!(
+				(0..=(isize::MAX.cast_unsigned())).contains(&value),
+				concat!(
+					"Numeric environment variable '",
+					$env,
+					"' must be valid for allocation!",
+				),
+			);
 			value
 		}
 	};
@@ -120,7 +124,7 @@ pub fn main() -> Result<()> {
 			let _ = dbg!(parser.parse_expr()?);
 		};
 		let function: FunctionDeclaration = {
-			let mut input: &[u8] = b"#(llvm-hot, strict-fp, force-inline) const funct main(): i32;";
+			let mut input: &[u8] = b"#(hot, strictfp, force_inline) const funct main(): i32;";
 			let mut parser: Parser = Source::into(&mut input);
 			let TopLevel::Function(function): TopLevel = dbg!(parser.parse()?);
 			function
@@ -131,7 +135,7 @@ pub fn main() -> Result<()> {
 			println!("Loading with LLVM version {major}.{minor}.{patch}...");
 		};
 		let codegen: CodeGen = CodeGen::new("test");
-		codegen.create_function(&function);
+		codegen.create_function(&function)?;
 		codegen.debug();
 	};
 	// SAFETY:

@@ -4,7 +4,7 @@ use std::fmt::{Display, Formatter};
 use std::hint::{assert_unchecked, cold_path, unreachable_unchecked};
 use std::io::{Error as IOError, Read};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 
 use crate::const_num_env;
 
@@ -43,26 +43,6 @@ pub enum Token {
 	Return,
 	/// `VAL : 'v' 'a' 'l' ;`
 	Val,
-	/// [`llvm.cold`](https://llvm.org/docs/LangRef.html#function-attributes:~:text=cold,-This)
-	///
-	/// `COLD : 'l' 'l' 'v' 'm' '-' 'c' 'o' 'l' 'd' ;`
-	Cold,
-	/// [`llvm.hot`](https://llvm.org/docs/LangRef.html#function-attributes:~:text=hot,-This)
-	///
-	/// `HOT : 'l' 'l' 'v' 'm' '-' 'h' 'o' 't' ;`
-	Hot,
-	/// [`llvm.strictfp`](https://llvm.org/docs/LangRef.html#function-attributes:~:text=strictfp)
-	///
-	/// `STRICT_FP : 's' 't' 'r' 'i' 'c' 't' '-' 'f' 'p' ;`
-	StrictFloatingPoint,
-	/// [`llvm.inlinehint`](https://llvm.org/docs/LangRef.html#function-attributes:~:text=inlinehint)
-	///
-	/// `TRY_INLINE : 't' 'r' 'y' '-' 'i' 'n' 'l' 'i' 'n' 'e' ;`
-	TryInline,
-	/// [`llvm.alwaysinline`](https://llvm.org/docs/LangRef.html#function-attributes:~:text=alwaysinline,-This)
-	///
-	/// `FORCE_INLINE : 'f' 'o' 'r' 'c' 'e' '-' 'i' 'n' 'l' 'i' 'n' 'e' ;`
-	ForceInline,
 	/// `OPEN_CURLY : '{' ;`
 	OpenCurlyBracket,
 	/// `CLOSE_CURLY : '}' ;`
@@ -129,7 +109,7 @@ const fn is_valid_for_identifier_first(input: char) -> bool {
 #[allow(clippy::inline_always)]
 #[inline(always)]
 const fn is_valid_for_identifier_rest(input: char) -> bool {
-	input.is_ascii_alphanumeric() || input == '_' || input == '-'
+	input.is_ascii_alphanumeric() || input == '_'
 }
 
 pub type Source<'src> = &'src mut dyn Read;
@@ -175,7 +155,8 @@ impl<'src> Lexer<'src> {
 			_ if is_valid_for_identifier_first(first) => {
 				// Restore first to stack so `Self::read_ident_chars()` will eat it.
 				self.cached_chars.push_back(first);
-				match self.read_ident_chars()?.as_str() {
+				let identifier: String = self.read_ident_chars()?;
+				match identifier.as_str() {
 					"funct" => Token::Function,
 					"unsafe" => Token::Unsafe,
 					"extern" => Token::External,
@@ -183,17 +164,7 @@ impl<'src> Lexer<'src> {
 					"private" => Token::Private,
 					"return" => Token::Return,
 					"val" => Token::Val,
-					"llvm-cold" => Token::Cold,
-					"llvm-hot" => Token::Hot,
-					"strict-fp" => Token::StrictFloatingPoint,
-					"try-inline" => Token::TryInline,
-					"force-inline" => Token::ForceInline,
-					identifier => {
-						if identifier.contains('-') {
-							bail!("Illegal identifier '{identifier}'!  Contained a '-'!");
-						};
-						Token::Identifier(identifier.to_owned())
-					},
+					_ => Token::Identifier(identifier),
 				}
 			},
 			'0'..='9' => {

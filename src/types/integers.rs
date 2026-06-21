@@ -3,7 +3,7 @@ use std::fmt::{Debug, Formatter, Result};
 use inkwell::context::Context;
 
 use crate::simple_type_impl;
-use crate::types::{__Type, LLVMType};
+use crate::types::{AsLLVMType, LLVMType};
 
 macro_rules! integer_type {
 	($__int:ident, $num_bits:literal, Some($type_fn:ident) $(,)?) => {
@@ -32,6 +32,17 @@ macro_rules! integer_type {
 			Signed,
 			#[doc = concat!("Unsigned ", $num_bits, "-bit integer type.")]
 			Unsigned,
+		}
+
+		const impl std::ops::Not for $__int {
+			type Output = Self;
+
+			fn not(self) -> Self::Output {
+				match self {
+					Self::Signed => Self::Unsigned,
+					Self::Unsigned => Self::Signed,
+				}
+			}
 		}
 
 		impl $__int {
@@ -80,9 +91,9 @@ integer_type!(__16BitInteger, 16, Some(i16_type));
 integer_type!(__32BitInteger, 32, Some(i32_type));
 integer_type!(__64BitInteger, 64, Some(i64_type));
 integer_type!(__128BitInteger, 128, None);
-impl __Type for __128BitInteger {
+impl AsLLVMType for __128BitInteger {
 	// FIXME: `Context` doesn't (currently) use `LLVMInt128TypeInContext()` under the hood.  Instead they use a custom-width integer type.  Awaiting fix.
-	fn provide_llvm_type<'ctx>(&self, context: &'ctx Context) -> LLVMType<'ctx> {
+	fn as_llvm_type<'ctx>(&self, context: &'ctx Context) -> LLVMType<'ctx> {
 		use inkwell::llvm_sys::core::LLVMInt128TypeInContext;
 		use inkwell::llvm_sys::prelude::LLVMTypeRef;
 		use inkwell::types::IntType;
@@ -96,10 +107,6 @@ impl __Type for __128BitInteger {
 		// - The passed parameter is a known valid `LLVMTypeRef` integer type.
 		let result: IntType = unsafe { IntType::new(raw_ty) };
 		result.into()
-	}
-
-	fn dbg_info(&self) -> &'static str {
-		"__128BitInteger"
 	}
 }
 

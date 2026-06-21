@@ -1,5 +1,7 @@
 use std::mem::ManuallyDrop;
 
+use anyhow::Result;
+
 use inkwell::attributes::AttributeLoc;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -7,7 +9,8 @@ use inkwell::module::{Linkage, Module};
 use inkwell::types::{BasicMetadataTypeEnum, FunctionType};
 use inkwell::values::FunctionValue;
 
-use crate::map_llvm_type;
+use crate::errors::{ErrorSource, ICE};
+use crate::map_llvm_type_to_metadata;
 use crate::parser::fn_attrs::{
 	Attributes,
 	is_cold,
@@ -18,7 +21,7 @@ use crate::parser::fn_attrs::{
 };
 use crate::parser::function::FunctionDeclaration;
 use crate::parser::modifiers::{Modifiers, is_external, is_private};
-use crate::types::{__Type, LLVMType};
+use crate::types::{__Type, AsLLVMType as _, LLVMType};
 
 #[derive(Debug)]
 pub struct CodeGen<'ctx> {
@@ -69,15 +72,18 @@ impl<'ctx> CodeGen<'ctx> {
 		}
 	}
 
-	pub fn create_function(&self, parsed: &FunctionDeclaration) {
+	pub fn create_function(&self, parsed: &FunctionDeclaration) -> Result<()> {
 		// SAFETY: The borrow lifetime here does not live longer than 'ctx.
-		unsafe { self.create_function_impl(parsed) };
+		unsafe { self.create_function_impl(parsed) }
 	}
 
 	/// # Safety
 	///
 	/// Callers must ensure that `'funct` does not live longer than `'ctx`.
-	unsafe fn create_function_impl<'funct>(&'funct self, parsed: &FunctionDeclaration)
+	unsafe fn create_function_impl<'funct>(
+		&'funct self,
+		parsed: &FunctionDeclaration,
+	) -> Result<()>
 	where
 		// 'ctx >= 'funct
 		'ctx: 'funct, {
@@ -91,11 +97,18 @@ impl<'ctx> CodeGen<'ctx> {
 				None
 			}
 		};
-		let return_type: LLVMType<'funct> = parsed.return_type().provide_llvm_type(&self.context);
-		let parameter_types: Vec<BasicMetadataTypeEnum<'funct>> = parsed.parameters().iter().map(|entry: &(_, Box<dyn __Type>)| {
-			map_llvm_type!(entry.1.provide_llvm_type(&self.context); ArrayType, FloatType, IntType, PointerType, StructType, VectorType, ScalableVectorType)
-		}).collect();
-		let ty: FunctionType<'funct> = return_type.fn_type(&parameter_types, false).unwrap();
+		let return_type: LLVMType<'funct> = parsed.return_type().as_llvm_type(&self.context);
+		let parameter_types: Vec<BasicMetadataTypeEnum<'funct>> = parsed
+			.parameters()
+			.iter()
+			.map(|entry: &(_, __Type)| {
+				map_llvm_type_to_metadata!(entry.1.as_llvm_type(&self.context))
+			})
+			.collect();
+		let ty: FunctionType<'funct> = return_type
+			.fn_type(&parameter_types, false)
+			// FIXME: https://github.com/TheDan64/inkwell/pull/697#issuecomment-4760915392
+			.map_err(|_| ICE::new(ErrorSource::CodeGen))?;
 
 		// SAFETY: Callers ensure 'funct <= 'ctx.
 		let module: &'funct Module<'funct> = unsafe { self.coerce_module() };
@@ -126,6 +139,7 @@ impl<'ctx> CodeGen<'ctx> {
 				add_function_attr!("alwaysinline");
 			};
 		};
+		Ok(())
 	}
 
 	pub fn debug(&self) {
