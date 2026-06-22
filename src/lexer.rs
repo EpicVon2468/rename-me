@@ -1,12 +1,11 @@
 use std::collections::VecDeque;
-use std::error::Error;
-use std::fmt::{Display, Formatter};
 use std::hint::{assert_unchecked, cold_path, unreachable_unchecked};
 use std::io::{Error as IOError, Read};
 
 use anyhow::{Result, anyhow, bail};
 
 use crate::const_num_env;
+use crate::errors::LexerError;
 
 /// `LETTER : [a-zA-Z]`
 ///
@@ -251,11 +250,12 @@ impl<'src> Lexer<'src> {
 		let mut invalid: bool = true;
 		let mut current: char = self.read_char()?;
 		if !is_valid_for_identifier_first(current) {
-			bail!("Invalid identifier start character '{current}'!");
+			// SANITY(unusual): Push erroneous into buffer so we can see it in the error.
+			buf.push(current);
+			bail!(LexerError::invalid_identifier(buf, true));
 		};
 		while is_valid_for_identifier_rest(current) {
-			// SANITY(unusual + verbosity):
-			// This expression short-circuits to prevent checking `current` if `invalid` is already false.
+			// SANITY(unusual + verbosity): If not already valid and run into an alphabetic character, then update validity.
 			if invalid && current.is_ascii_alphabetic() {
 				// There needs to be at least one alphabetic character in an identifier.
 				invalid = false;
@@ -272,7 +272,9 @@ impl<'src> Lexer<'src> {
 		// The `invalid` variable is true by default, the only way for it to be false is for an alphabetic character to be appended to `buf`.
 		// If `buf` is empty, then no characters were appended, so `invalid` is true.
 		if invalid {
-			bail!("Invalid identifier '{buf}'!");
+			// An identifier consisting only of '_' is invalid, but the first check won't catch it.
+			let is_identifier_start: bool = buf.len() == 1;
+			bail!(LexerError::invalid_identifier(buf, is_identifier_start));
 		};
 		Ok(buf)
 	}
@@ -296,7 +298,7 @@ impl<'src> Lexer<'src> {
 	fn read(&mut self, buf: &mut [u8]) -> Result<()> {
 		self.source
 			.read_exact(buf)
-			.map_err(|error: IOError| anyhow!(ReadError::ForwardedIOError(error)))
+			.map_err(|error: IOError| anyhow!(LexerError::from(error)))
 	}
 
 	fn read_char(&mut self) -> Result<char> {
@@ -320,7 +322,7 @@ impl<'src> Lexer<'src> {
 				// Aside from malicious or invalid input, it isn't expected for any of these chars to appear.
 				// A fair few of them are ancient ASCII sequences which most people will never run into in their entire lives.
 				cold_path();
-				bail!(ReadError::DisallowedASCIIChar(initial));
+				bail!(LexerError::DisallowedASCIIChar(initial));
 			};
 			#[expect(
 				clippy::as_conversions,
@@ -331,7 +333,7 @@ impl<'src> Lexer<'src> {
 		};
 
 		if initial < 192 {
-			bail!(ReadError::ZeroLengthByte(initial));
+			bail!(LexerError::ZeroLengthByte(initial));
 		};
 
 		// SAFETY: `initial` is always >= 192 at this point (see above).
@@ -344,7 +346,7 @@ impl<'src> Lexer<'src> {
 		// SAFETY: `initial` is always >= 192 at this point (see above).
 		unsafe {
 			if let Err(error) = validate_utf8_char(&buf) {
-				bail!(error.context(ReadError::InvalidByteSequence(buf)));
+				bail!(error.context(LexerError::InvalidByteSequence(buf)));
 			};
 		};
 		// SANITY(unusual): There doesn't appear to be any other way to make a `char` from a `u8` slice than this.
@@ -362,46 +364,6 @@ impl<'src> Lexer<'src> {
 			};
 		};
 		Ok(result)
-	}
-}
-
-#[derive(Debug)]
-pub enum ReadError {
-	ForwardedIOError(IOError),
-	DisallowedASCIIChar(u8),
-	ZeroLengthByte(u8),
-	InvalidByteSequence(Vec<u8>),
-}
-
-impl Display for ReadError {
-	fn fmt(&self, destination: &mut Formatter<'_>) -> std::fmt::Result {
-		match *self {
-			Self::ForwardedIOError(_) => write!(
-				destination,
-				"An I/O error occurred whilst trying to read bytes from source!",
-			),
-			Self::DisallowedASCIIChar(ref char) => write!(
-				destination,
-				"Disallowed ASCII character appeared!  Character (in decimal) was: '{char}'!",
-			),
-			Self::ZeroLengthByte(ref byte) => write!(
-				destination,
-				"Invalid UTF-8 byte with length of 0 appeared!  Byte (in decimal) was: '{byte}'!",
-			),
-			Self::InvalidByteSequence(ref sequence) => write!(
-				destination,
-				"Invalid UTF-8 byte sequence!  Sequence (in decimal(s)) was '{sequence:?}'!",
-			),
-		}
-	}
-}
-
-impl Error for ReadError {
-	fn source(&self) -> Option<&(dyn Error + 'static)> {
-		match *self {
-			Self::ForwardedIOError(ref source) => Some(source),
-			_ => None,
-		}
 	}
 }
 
@@ -477,7 +439,7 @@ unsafe fn utf8_width(initial: u8) -> Result<usize> {
 	// SANITY(unusual): Cheaper to store 64 `u8`s and convert at use-site than to store 64 `usize`s.
 	let len: usize = UTF8_CHAR_WIDTH[index] as usize;
 	if len == 0 {
-		bail!(ReadError::ZeroLengthByte(initial));
+		bail!(LexerError::ZeroLengthByte(initial));
 	};
 	Ok(len)
 }

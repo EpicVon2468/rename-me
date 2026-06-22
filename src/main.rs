@@ -85,12 +85,16 @@ use crate::parser::{Parser, TopLevel};
 #[macro_export]
 macro_rules! unreachable_ice {
 	($msg:expr, $src:ident $(,)?) => {{
+		#[allow(unused_imports)]
 		use anyhow::{Error as Anyhow, anyhow, bail};
 
 		use $crate::errors::{ErrorSource, ICE};
 
 		std::hint::cold_path();
-		bail!(Anyhow::context(anyhow!($msg), ICE::new(ErrorSource::$src)));
+		bail!(Anyhow::context(
+			$crate::with_location!(anyhow!($msg)),
+			ICE::new(ErrorSource::$src),
+		));
 	}};
 }
 
@@ -116,6 +120,27 @@ macro_rules! const_num_env {
 	};
 }
 
+#[macro_export]
+macro_rules! with_location {
+	($err:expr) => {{
+		#[allow(unused_imports)]
+		use anyhow::{Error as Anyhow, anyhow};
+
+		Anyhow::context(
+			anyhow!(concat!(
+				"[",
+				file!(),
+				':',
+				line!(),
+				':',
+				column!(),
+				"] [compiler internal tracking; ignore this line]",
+			)),
+			$err,
+		)
+	}};
+}
+
 pub fn main() -> Result<()> {
 	{
 		{
@@ -124,6 +149,7 @@ pub fn main() -> Result<()> {
 			let _ = dbg!(parser.parse_expr()?);
 		};
 		let function: FunctionDeclaration = {
+			// #(method[MyStruct])
 			let mut input: &[u8] = b"#(hot, strictfp, force_inline) const funct main(): i32;";
 			let mut parser: Parser = Source::into(&mut input);
 			let TopLevel::Function(function): TopLevel = dbg!(parser.parse()?);

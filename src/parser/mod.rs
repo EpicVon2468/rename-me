@@ -2,6 +2,7 @@ use anyhow::{Context as _, Result, bail};
 
 use derive_more::{Constructor, Display};
 
+use crate::errors::UnexpectedTokenError;
 use crate::lexer::{Lexer, Source, Token};
 use crate::types::floats::{
 	__16BitBrainFloatingPoint,
@@ -19,7 +20,7 @@ use crate::types::integers::{
 	__Size,
 };
 use crate::types::{__Boolean, __Type, __Void};
-use crate::{const_num_env, unreachable_ice};
+use crate::{const_num_env, unreachable_ice, with_location};
 
 macro_rules! bitflag {
 	($flag_ty:ty, $flag:expr, $fn_name:ident $(,)?) => {
@@ -69,6 +70,7 @@ pub mod fn_attrs {
 			.field("is_strictfp", &is_strictfp(val))
 			.field("is_try_inline", &is_try_inline(val))
 			.field("is_force_inline", &is_force_inline(val))
+			.field("is_method", &is_method(val))
 			.finish()
 	}
 
@@ -81,6 +83,7 @@ pub mod fn_attrs {
 				"strictfp" => Some(ATTR_STRICTFP),
 				"try_inline" => Some(ATTR_TRY_INLINE),
 				"force_inline" => Some(ATTR_FORCE_INLINE),
+				"method" => Some(ATTR_METHOD),
 				_ => None,
 			},
 			_ => None,
@@ -106,6 +109,9 @@ pub mod fn_attrs {
 	/// [`llvm.alwaysinline`](https://llvm.org/docs/LangRef.html#function-attributes:~:text=alwaysinline,-This)
 	pub const ATTR_FORCE_INLINE: Attributes = 0b0001_0000;
 	bitflag!(Attributes, ATTR_FORCE_INLINE, is_force_inline);
+
+	pub const ATTR_METHOD: Attributes = 0b0010_0000;
+	bitflag!(Attributes, ATTR_METHOD, is_method);
 }
 
 pub mod function;
@@ -181,7 +187,7 @@ pub enum Unary {
 
 macro_rules! unexpected {
 	($unexpected:expr $(,)?) => {{
-		bail!(UnexpectedTokenError::new($unexpected));
+		bail!(with_location!(UnexpectedTokenError::new($unexpected)));
 	}};
 }
 
@@ -338,7 +344,7 @@ impl Parser<'_> {
 			let _ = self.lexer.read_token();
 			// Eat `return_type`.
 			let return_type: String = unwrap_identifier!(self);
-			self.type_by_name(&return_type)?
+			self.lookup_type(&return_type)?
 		} else {
 			Box::new(__Void::instance())
 		};
@@ -387,6 +393,9 @@ impl Parser<'_> {
 			};
 			unexpected!(token);
 		}
+		if *self.lexer.peek_token()? == Token::Hash {
+			output |= self.parse_function_attrs()?;
+		};
 		Ok(output)
 	}
 
@@ -492,7 +501,7 @@ impl Parser<'_> {
 			if token == Token::CloseBracket {
 				break;
 			} else if token != Token::Comma {
-				bail!("Expected closing bracket or a comma, but instead found '{token:?}'!");
+				unexpected!(token);
 			};
 		}
 		Ok(Expr::FunctionCall(identifier, parameters))
@@ -528,7 +537,11 @@ impl Parser<'_> {
 				let _ = self.lexer.read_token();
 				Expr::FloatLiteral(value)
 			},
-			_ => todo!("Is this unreachable?"),
+			_ => unexpected!(
+				self.lexer
+					.read_token()
+					.expect("Unreachable panic, this read is cached."),
+			),
 		};
 		Ok(expr)
 	}
@@ -616,7 +629,7 @@ impl Parser<'_> {
 }
 
 impl Parser<'_> {
-	pub fn type_by_name(&self, identifier: &str) -> Result<__Type> {
+	pub fn lookup_type(&self, identifier: &str) -> Result<__Type> {
 		if identifier.is_empty() || !identifier.is_ascii() {
 			unreachable_ice!(
 				"An identifier which was empty or contained non-ASCII characters was found!",
@@ -644,15 +657,7 @@ impl Parser<'_> {
 			"f32" => into!(__32BitFloatingPoint::instance()),
 			"f64" => into!(__64BitFloatingPoint::instance()),
 			"f128" => into!(__128BitFloatingPoint::instance()),
-			_ => todo!("Custom type lookup"),
+			_ => todo!("Custom types (i.e. structs)"),
 		})
 	}
-}
-
-#[derive(thiserror::Error, Debug)]
-#[derive_const(Constructor)]
-#[error("Unexpected token reached!  Actual token was {unexpected:?}!")]
-pub struct UnexpectedTokenError {
-	// TODO: `expected: Option<Token>,`
-	unexpected: Token,
 }
