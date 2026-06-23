@@ -9,7 +9,7 @@ use inkwell::module::{Linkage, Module};
 use inkwell::types::{BasicMetadataTypeEnum, FunctionType};
 use inkwell::values::FunctionValue;
 
-use crate::errors::{ErrorSource, ICE};
+use crate::errors::{ErrorSource, ICE, Phase};
 use crate::map_llvm_type_to_metadata;
 use crate::parser::fn_attrs::{
 	Attributes,
@@ -108,7 +108,12 @@ impl<'ctx> CodeGen<'ctx> {
 		let ty: FunctionType<'funct> = return_type
 			.fn_type(&parameter_types, false)
 			// FIXME: https://github.com/TheDan64/inkwell/pull/697#issuecomment-4760915392
-			.map_err(|_| ICE::new(ErrorSource::CodeGen))?;
+			.map_err(|_| {
+				ICE::new(ErrorSource::new(
+					"[unimplemented: name of input file]",
+					Phase::CodeGen,
+				))
+			})?;
 
 		// SAFETY: Callers ensure 'funct <= 'ctx.
 		let module: &'funct Module<'funct> = unsafe { self.coerce_module() };

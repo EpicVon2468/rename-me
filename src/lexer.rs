@@ -4,85 +4,77 @@ use std::io::{Error as IOError, Read};
 
 use anyhow::{Result, anyhow, bail};
 
+use derive_more::Display;
+
 use crate::const_num_env;
 use crate::errors::LexerError;
 
 /// `LETTER : [a-zA-Z]`
 ///
 /// `NUM : [0-9]`
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Display)]
 #[non_exhaustive]
 pub enum Token {
 	// Can't be only '_', must also consist of at least one letter.
-	/// `IDENTIFIER : IDENTIFIER_START IDENTIFIER_REST* ;`
-	///
-	/// `IDENTIFIER_START : LETTER | '_' ;`
-	///
-	/// `IDENTIFIER_REST : LETTER | NUM | '_' ;`
+	#[display("IDENTIFIER : ( LETTER | '_' ) ( LETTER | NUM | '_' )* ;")]
 	Identifier(String),
 	/// Integer value.
-	///
-	/// `LITERAL : NUM+ ( '_' NUM+ )* ;`
+	#[display("LITERAL : NUM+ ( '_' NUM+ )* ;")]
 	Literal(String),
 	/// Floating-point value.
-	///
-	/// `REAL : NUM+ ( '_' NUM+ )* ( '.' NUM+ ( '_' NUM+ )* )? 'f' ;`
+	#[display("REAL : NUM+ ( '_' NUM+ )* ( '.' NUM+ ( '_' NUM+ )* )? 'f' ;")]
 	Real(String),
-	/// `FUNCTION : 'f' 'u' 'n' 'c' 't' ;`
+	#[display("FUNCTION : 'f' 'u' 'n' 'c' 't' ;")]
 	Function,
-	/// `UNSAFE : 'u' 'n' 's' 'a' 'f' 'e' ;`
+	#[display("UNSAFE : 'u' 'n' 's' 'a' 'f' 'e' ;")]
 	Unsafe,
-	/// `EXTERNAL : 'e' 'x' 't' 'e' 'r' 'n' ;`
+	#[display("EXTERNAL : 'e' 'x' 't' 'e' 'r' 'n' ;")]
 	External,
-	/// `CONSTANT : 'c' 'o' 'n' 's' 't' ;`
+	#[display("CONSTANT : 'c' 'o' 'n' 's' 't' ;")]
 	Constant,
-	/// `PRIVATE : 'p' 'r' 'i' 'v' 'a' 't' 'e' ;`
+	#[display("PRIVATE : 'p' 'r' 'i' 'v' 'a' 't' 'e' ;")]
 	Private,
-	/// `RETURN : 'r' 'e' 't' 'u' 'r' 'n' ;`
+	#[display("RETURN : 'r' 'e' 't' 'u' 'r' 'n' ;")]
 	Return,
-	/// `VAL : 'v' 'a' 'l' ;`
+	#[display("VAL : 'v' 'a' 'l' ;")]
 	Val,
-	/// `OPEN_CURLY : '{' ;`
+	#[display("OPEN_CURLY : '{{' ;")]
 	OpenCurlyBracket,
-	/// `CLOSE_CURLY : '}' ;`
+	#[display("CLOSE_CURLY : '}}' ;")]
 	CloseCurlyBracket,
-	/// `OPEN_BRACKET : '(' ;`
+	#[display("OPEN_BRACKET : '(' ;")]
 	OpenBracket,
-	/// `CLOSE_BRACKET : ')' ;`
+	#[display("CLOSE_BRACKET : ')' ;")]
 	CloseBracket,
-	/// `OPEN_SQUARE_BRACKET : '[' ;`
+	#[display("OPEN_SQUARE_BRACKET : '[' ;")]
 	OpenSquareBracket,
-	/// `CLOSE_SQUARE_BRACKET : ']' ;`
+	#[display("CLOSE_SQUARE_BRACKET : ']' ;")]
 	CloseSquareBracket,
-	/// `SEMICOLON : ';' ;`
+	#[display("SEMICOLON : ';' ;")]
 	Semicolon,
-	/// `COLON : ':' ;`
+	#[display("COLON : ':' ;")]
 	Colon,
 	/// Div.
-	///
-	/// `SLASH : '/' ;`
+	#[display("SLASH : '/' ;")]
 	Slash,
 	/// Mul or ptr.
-	///
-	/// `ASTERISK : '*' ;`
+	#[display("ASTERISK : '*' ;")]
 	Asterisk,
-	/// `PLUS : '+' ;`
+	#[display("PLUS : '+' ;")]
 	Plus,
 	/// (Unary) minus.
-	///
-	/// `MINUS : '-' ;`
+	#[display("MINUS : '-' ;")]
 	Minus,
 	/// Borrow or 'boolean and'.
-	///
-	/// `AMPERSAND : '&' ;`
+	#[display("AMPERSAND : '&' ;")]
 	Ampersand,
-	/// `COMMA : ',' ;`
+	#[display("COMMA : ',' ;")]
 	Comma,
-	/// `EQUALS : '=' ;`
+	#[display("EQUALS : '=' ;")]
 	Equals,
-	/// `EXCLAMATION_MARK : '!' ;`
+	#[display("EXCLAMATION_MARK : '!' ;")]
 	ExclamationMark,
-	/// `HASH : '#' ;`
+	#[display("HASH : '#' ;")]
 	Hash,
 }
 
@@ -116,6 +108,8 @@ pub type Source<'src> = &'src mut dyn Read;
 pub struct Lexer<'src> {
 	source: Source<'src>,
 	cached: Option<Token>,
+	cached_for_shebang: Option<Token>,
+	read_multiple: Option<bool>,
 	cached_chars: VecDeque<char>,
 }
 
@@ -130,7 +124,31 @@ impl<'src> Lexer<'src> {
 		Self {
 			source,
 			cached: None,
+			cached_for_shebang: None,
+			read_multiple: None,
 			cached_chars: VecDeque::new(),
+		}
+	}
+
+	pub fn try_eat_shebang(&mut self) -> Result<bool> {
+		if self.read_multiple.is_some_and(|it: bool| it) {
+			return Ok(false);
+		};
+		// SANITY: We can only be here a total of two times.  Most likely just one.
+		cold_path();
+		debug_assert_eq!(self.cached_for_shebang, None);
+		let current: Token = self.read_token()?;
+		let next: Token = self.read_token()?;
+		if current == Token::Hash && next == Token::ExclamationMark {
+			let mut skip: char = self.read_char_impl()?;
+			while skip != '\n' {
+				skip = self.read_char_impl()?;
+			}
+			Ok(true)
+		} else {
+			self.cached = Some(current);
+			self.cached_for_shebang = Some(next);
+			Ok(false)
 		}
 	}
 
@@ -148,6 +166,12 @@ impl<'src> Lexer<'src> {
 	pub fn read_token(&mut self) -> Result<Token> {
 		if let Some(token) = self.cached.take() {
 			return Ok(token);
+		};
+		if self.cached_for_shebang.is_some() {
+			// SANITY: This will only occur once.
+			cold_path();
+			// SAFETY:
+			return Ok(unsafe { self.cached_for_shebang.take().unwrap_unchecked() });
 		};
 		let first: char = self.next_sig_char()?;
 		Ok(match first {
@@ -309,6 +333,12 @@ impl<'src> Lexer<'src> {
 	}
 
 	fn read_char_impl(&mut self) -> Result<char> {
+		match self.read_multiple {
+			None => self.read_multiple = Some(false),
+			Some(false) => self.read_multiple = Some(true),
+			Some(true) => (),
+		};
+
 		let [initial]: [u8; 1] = {
 			let mut buf: [u8; 1] = [0; 1];
 			self.read(&mut buf)?;

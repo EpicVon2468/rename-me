@@ -9,11 +9,27 @@ use crate::lexer::Token;
 #[must_use]
 #[derive(Debug, Error)]
 #[derive_const(Constructor)]
-#[error("An Internal Compiler Error occurred whilst {0}!  This is a compiler bug, not your code!")]
+#[error(
+	"An Internal Compiler Error occurred whilst compiling {0}!  This is a compiler bug, not a bug your code!"
+)]
 pub struct ICE(ErrorSource);
 
+#[must_use]
+#[derive(Debug, Error)]
+#[derive_const(Constructor)]
+#[error("An error occurred whilst compiling {0}!")]
+pub struct CompileError(ErrorSource);
+
 #[derive(Debug, Display)]
-pub enum ErrorSource {
+#[derive_const(Constructor)]
+#[display("{input_file_name} during phase {phase:?}")]
+pub struct ErrorSource {
+	input_file_name: &'static str,
+	phase: Phase,
+}
+
+#[derive(Debug, Display)]
+pub enum Phase {
 	#[display("lexing input")]
 	Lexing,
 	#[display("parsing tokens")]
@@ -52,7 +68,7 @@ impl LexerError {
 #[must_use]
 #[derive(Debug, Error)]
 #[derive_const(Constructor)]
-#[error("Unexpected token reached!  Actual token was {unexpected:?}!")]
+#[error("Unexpected token reached!  Actual token was: `{unexpected}`")]
 pub struct UnexpectedTokenError {
 	// TODO: `expected: Option<&[Token]>,`
 	unexpected: Token,

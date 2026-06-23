@@ -1,8 +1,7 @@
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result};
 
 use derive_more::{Constructor, Display};
 
-use crate::errors::UnexpectedTokenError;
 use crate::lexer::{Lexer, Source, Token};
 use crate::types::floats::{
 	__16BitBrainFloatingPoint,
@@ -20,7 +19,7 @@ use crate::types::integers::{
 	__Size,
 };
 use crate::types::{__Boolean, __Type, __Void};
-use crate::{const_num_env, unreachable_ice, with_location};
+use crate::{const_num_env, expect_token, unexpected_token, unreachable_ice, unwrap_identifier};
 
 macro_rules! bitflag {
 	($flag_ty:ty, $flag:expr, $fn_name:ident $(,)?) => {
@@ -58,12 +57,10 @@ pub mod modifiers {
 }
 
 pub mod fn_attrs {
-	use std::fmt::Formatter;
-
-	use crate::lexer::Token;
+	use std::fmt::{Formatter, Result};
 
 	pub type Attributes = u8;
-	pub fn fmt_attributes(val: u8, fmt: &mut Formatter<'_>) -> std::fmt::Result {
+	pub fn fmt_attributes(val: u8, fmt: &mut Formatter<'_>) -> Result {
 		fmt.debug_struct("Attributes")
 			.field("is_cold", &is_cold(val))
 			.field("is_hot", &is_hot(val))
@@ -72,22 +69,6 @@ pub mod fn_attrs {
 			.field("is_force_inline", &is_force_inline(val))
 			.field("is_method", &is_method(val))
 			.finish()
-	}
-
-	#[must_use]
-	pub const fn from_token(token: &Token) -> Option<Attributes> {
-		match *token {
-			Token::Identifier(ref identifier) => match identifier.as_str() {
-				"cold" => Some(ATTR_COLD),
-				"hot" => Some(ATTR_HOT),
-				"strictfp" => Some(ATTR_STRICTFP),
-				"try_inline" => Some(ATTR_TRY_INLINE),
-				"force_inline" => Some(ATTR_FORCE_INLINE),
-				"method" => Some(ATTR_METHOD),
-				_ => None,
-			},
-			_ => None,
-		}
 	}
 
 	/// [`llvm.cold`](https://llvm.org/docs/LangRef.html#function-attributes:~:text=cold,-This)
@@ -116,12 +97,21 @@ pub mod fn_attrs {
 
 pub mod function;
 
+use crate::parser::fn_attrs::{
+	ATTR_COLD,
+	ATTR_FORCE_INLINE,
+	ATTR_HOT,
+	ATTR_METHOD,
+	ATTR_STRICTFP,
+	ATTR_TRY_INLINE,
+};
 use fn_attrs::Attributes;
 use function::FunctionDeclaration;
 use modifiers::{MOD_CONSTANT, MOD_EXTERNAL, MOD_PRIVATE, MOD_UNSAFE, Modifiers};
 
 #[must_use]
 #[derive(Debug)]
+#[repr(transparent)]
 pub enum TopLevel {
 	Function(FunctionDeclaration),
 }
@@ -185,12 +175,6 @@ pub enum Unary {
 	Ref,
 }
 
-macro_rules! unexpected {
-	($unexpected:expr $(,)?) => {{
-		bail!(with_location!(UnexpectedTokenError::new($unexpected)));
-	}};
-}
-
 macro_rules! handle_erroneous {
 	($self:expr, $lookahead:expr $(,)?) => {{
 		if matches!(
@@ -210,48 +194,9 @@ macro_rules! handle_erroneous {
 				| Token::ExclamationMark
 		) {
 			let erroneous: Token = $self.lexer.read_token().expect("Cached.");
-			unexpected!(erroneous);
+			unexpected_token!(erroneous);
 		};
 	}};
-}
-
-macro_rules! expect_token {
-	($(@[unreachable = bail] $(,)?)? $actual:expr, $expected:pat $(, $($name:ident),* )? $(,)?) => {{
-		let next: Token = $actual;
-		let $expected = next else {
-			unexpected!(next);
-		};
-		$(($($name),*))?
-	}};
-	(@[unreachable = ICE] $(,)? $actual:expr, $expected:pat $(, $($name:ident),* )? $(,)?) => {{
-		let actual = $actual;
-		let $expected = actual else {
-			unreachable_ice!(
-				format!(concat!("Token {:?} did not match `", stringify!($expected), "`!"), actual),
-				Parsing,
-			);
-		};
-		$(($($name),*))?
-	}};
-}
-
-macro_rules! unwrap_identifier {
-	($(@[unreachable = bail] $(,)?)? $self:expr $(,)?) => {
-		expect_token!(
-			@[unreachable = bail],
-			$self.lexer.read_token()?,
-			Token::Identifier(identifier),
-			identifier,
-		)
-	};
-	(@[unreachable = ICE] $(,)? $self:expr $(,)?) => {
-		expect_token!(
-			@[unreachable = ICE],
-			$self.lexer.read_token(),
-			Ok(Token::Identifier(identifier)),
-			identifier,
-		)
-	};
 }
 
 #[derive_const(Constructor)]
@@ -298,6 +243,9 @@ impl Parser<'_> {
 			};
 		}
 		let attributes: Attributes = if *self.lexer.peek_token()? == Token::Hash {
+			if self.lexer.try_eat_shebang()? {
+				return self.parse_top_level();
+			};
 			self.parse_function_attrs()?
 		} else {
 			0
@@ -328,7 +276,7 @@ impl Parser<'_> {
 				modifiers |= MOD_UNSAFE;
 				try_eat_extern!();
 			},
-			_ => unexpected!(
+			_ => unexpected_token!(
 				self.lexer
 					.read_token()
 					.expect("Unreachable panic, this read is cached."),
@@ -375,7 +323,7 @@ impl Parser<'_> {
 		let mut output: Attributes = 0;
 		loop {
 			let token: Token = self.lexer.read_token()?;
-			if let Some(attr) = fn_attrs::from_token(&token) {
+			if let Some(attr) = self.parse_function_attribute(&token) {
 				output |= attr;
 				match self.lexer.read_token()? {
 					Token::Comma => {
@@ -388,15 +336,30 @@ impl Parser<'_> {
 						continue;
 					},
 					Token::CloseBracket => break,
-					unexpected => unexpected!(unexpected),
+					unexpected => unexpected_token!(unexpected),
 				};
 			};
-			unexpected!(token);
+			unexpected_token!(token);
 		}
 		if *self.lexer.peek_token()? == Token::Hash {
 			output |= self.parse_function_attrs()?;
 		};
 		Ok(output)
+	}
+
+	pub fn parse_function_attribute(&mut self, token: &Token) -> Option<Attributes> {
+		match *token {
+			Token::Identifier(ref identifier) => match identifier.as_str() {
+				"cold" => Some(ATTR_COLD),
+				"hot" => Some(ATTR_HOT),
+				"strictfp" => Some(ATTR_STRICTFP),
+				"try_inline" => Some(ATTR_TRY_INLINE),
+				"force_inline" => Some(ATTR_FORCE_INLINE),
+				"method" => Some(ATTR_METHOD),
+				_ => None,
+			},
+			_ => None,
+		}
 	}
 
 	pub fn parse_expr(&mut self) -> Result<Expr> {
@@ -501,7 +464,7 @@ impl Parser<'_> {
 			if token == Token::CloseBracket {
 				break;
 			} else if token != Token::Comma {
-				unexpected!(token);
+				unexpected_token!(token);
 			};
 		}
 		Ok(Expr::FunctionCall(identifier, parameters))
@@ -537,7 +500,7 @@ impl Parser<'_> {
 				let _ = self.lexer.read_token();
 				Expr::FloatLiteral(value)
 			},
-			_ => unexpected!(
+			_ => unexpected_token!(
 				self.lexer
 					.read_token()
 					.expect("Unreachable panic, this read is cached."),
@@ -565,9 +528,9 @@ impl Parser<'_> {
 				expect_token!(self.lexer.read_token()?, Token::OpenCurlyBracket);
 			},
 			Token::OpenCurlyBracket => (),
-			unexpected => unexpected!(unexpected),
+			unexpected => unexpected_token!(unexpected),
 		};
-		let mut result: Vec<Stmt> = Vec::with_capacity(4);
+		let mut result: Vec<Stmt> = Vec::with_capacity(const_num_env!("__BLOCK_BUF_CAPACITY", 4));
 		let expr: Expr = Expr::Block(modifiers, todo!(), todo!());
 		Ok(expr)
 	}

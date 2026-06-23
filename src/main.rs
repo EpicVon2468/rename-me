@@ -70,6 +70,7 @@
 pub mod codegen;
 pub mod errors;
 pub mod lexer;
+pub mod macros;
 pub mod parser;
 pub mod types;
 
@@ -81,65 +82,6 @@ use crate::codegen::CodeGen;
 use crate::lexer::Source;
 use crate::parser::function::FunctionDeclaration;
 use crate::parser::{Parser, TopLevel};
-
-#[macro_export]
-macro_rules! unreachable_ice {
-	($msg:expr, $src:ident $(,)?) => {{
-		#[allow(unused_imports)]
-		use anyhow::{Error as Anyhow, anyhow, bail};
-
-		use $crate::errors::{ErrorSource, ICE};
-
-		std::hint::cold_path();
-		bail!(Anyhow::context(
-			$crate::with_location!(anyhow!($msg)),
-			ICE::new(ErrorSource::$src),
-		));
-	}};
-}
-
-#[macro_export]
-macro_rules! const_num_env {
-	($env:literal, $default:literal $(,)?) => {
-		const {
-			#[inline(always)]
-			const fn mapper(value: &str) -> usize {
-				<usize as std::str::FromStr>::from_str(value).unwrap_or($default)
-			}
-			let value: usize = option_env!($env).map_or($default, mapper);
-			assert!(
-				(0..=(isize::MAX.cast_unsigned())).contains(&value),
-				concat!(
-					"Numeric environment variable '",
-					$env,
-					"' must be valid for allocation!",
-				),
-			);
-			value
-		}
-	};
-}
-
-#[macro_export]
-macro_rules! with_location {
-	($err:expr) => {{
-		#[allow(unused_imports)]
-		use anyhow::{Error as Anyhow, anyhow};
-
-		Anyhow::context(
-			anyhow!(concat!(
-				"[",
-				file!(),
-				':',
-				line!(),
-				':',
-				column!(),
-				"] [compiler internal tracking; ignore this line]",
-			)),
-			$err,
-		)
-	}};
-}
 
 pub fn main() -> Result<()> {
 	{

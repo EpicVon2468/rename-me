@@ -1,0 +1,37 @@
+ATTR_COLD : 'c' 'o' 'l' 'd' ;
+
+ATTR_HOT : 'h' 'o' 't' ;
+
+ATTR_STRICT_FP : 's' 't' 'r' 'i' 'c' 't' 'f' 'p' ;
+
+ATTR_TRY_INLINE : 't' 'r' 'y' '_' 'i' 'n' 'l' 'i' 'n' 'e' ;
+
+ATTR_FORCE_INLINE : 'f' 'o' 'r' 'c' 'e' '_' 'i' 'n' 'l' 'i' 'n' 'e' ;
+
+attr : ATTR_COLD | ATTR_HOT | ATTR_STRICT_FP | ATTR_TRY_INLINE | ATTR_FORCE_INLINE ;
+
+functionAttrs :
+	HASH
+	OPEN_BRACKET
+	(
+		attr
+		( COMMA attr )*
+		COMMA?
+	)
+	CLOSE_BRACKET
+	;
+
+functionDecl :
+	functionAttrs*
+	PRIVATE? CONSTANT? ( UNSAFE EXTERNAL? )?
+	FUNCTION
+	IDENTIFIER
+	OPEN_BRACKET
+	(
+		IDENTIFIER COLON TYPE
+		( COMMA IDENTIFIER COLON TYPE )*
+		COMMA?
+	)?
+	CLOSE_BRACKET
+	( COLON TYPE )?
+	;
