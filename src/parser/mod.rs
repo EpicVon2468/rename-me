@@ -56,56 +56,10 @@ pub mod modifiers {
 	bitflag!(Modifiers, MOD_PRIVATE, is_private);
 }
 
-pub mod fn_attrs {
-	use std::fmt::{Formatter, Result};
-
-	pub type Attributes = u8;
-	pub fn fmt_attributes(val: u8, fmt: &mut Formatter<'_>) -> Result {
-		fmt.debug_struct("Attributes")
-			.field("is_cold", &is_cold(val))
-			.field("is_hot", &is_hot(val))
-			.field("is_strictfp", &is_strictfp(val))
-			.field("is_try_inline", &is_try_inline(val))
-			.field("is_force_inline", &is_force_inline(val))
-			.field("is_method", &is_method(val))
-			.finish()
-	}
-
-	/// [`llvm.cold`](https://llvm.org/docs/LangRef.html#function-attributes:~:text=cold,-This)
-	pub const ATTR_COLD: Attributes = 0b0000_0001;
-	bitflag!(Attributes, ATTR_COLD, is_cold);
-
-	/// [`llvm.hot`](https://llvm.org/docs/LangRef.html#function-attributes:~:text=hot,-This)
-	pub const ATTR_HOT: Attributes = 0b0000_0010;
-	bitflag!(Attributes, ATTR_HOT, is_hot);
-
-	/// [`llvm.strictfp`](https://llvm.org/docs/LangRef.html#function-attributes:~:text=strictfp)
-	pub const ATTR_STRICTFP: Attributes = 0b0000_0100;
-	bitflag!(Attributes, ATTR_STRICTFP, is_strictfp);
-
-	/// [`llvm.inlinehint`](https://llvm.org/docs/LangRef.html#function-attributes:~:text=inlinehint)
-	pub const ATTR_TRY_INLINE: Attributes = 0b0000_1000;
-	bitflag!(Attributes, ATTR_TRY_INLINE, is_try_inline);
-
-	/// [`llvm.alwaysinline`](https://llvm.org/docs/LangRef.html#function-attributes:~:text=alwaysinline,-This)
-	pub const ATTR_FORCE_INLINE: Attributes = 0b0001_0000;
-	bitflag!(Attributes, ATTR_FORCE_INLINE, is_force_inline);
-
-	pub const ATTR_METHOD: Attributes = 0b0010_0000;
-	bitflag!(Attributes, ATTR_METHOD, is_method);
-}
-
+pub mod fn_attrs;
 pub mod function;
 
-use crate::parser::fn_attrs::{
-	ATTR_COLD,
-	ATTR_FORCE_INLINE,
-	ATTR_HOT,
-	ATTR_METHOD,
-	ATTR_STRICTFP,
-	ATTR_TRY_INLINE,
-};
-use fn_attrs::Attributes;
+use fn_attrs::{Attribute, Attributes};
 use function::FunctionDeclaration;
 use modifiers::{MOD_CONSTANT, MOD_EXTERNAL, MOD_PRIVATE, MOD_UNSAFE, Modifiers};
 
@@ -248,7 +202,7 @@ impl Parser<'_> {
 			};
 			self.parse_function_attrs()?
 		} else {
-			0
+			Attributes::default()
 		};
 		match *self.lexer.peek_token()? {
 			// Continue down.
@@ -320,10 +274,10 @@ impl Parser<'_> {
 		// Eat '('.
 		expect_token!(self.lexer.read_token()?, Token::OpenBracket);
 
-		let mut output: Attributes = 0;
+		let mut output: Attributes = Attributes::default();
 		loop {
 			let token: Token = self.lexer.read_token()?;
-			if let Some(attr) = self.parse_function_attribute(&token) {
+			if let Some(attr) = self.parse_function_attribute(&token)? {
 				output |= attr;
 				match self.lexer.read_token()? {
 					Token::Comma => {
@@ -347,18 +301,25 @@ impl Parser<'_> {
 		Ok(output)
 	}
 
-	pub fn parse_function_attribute(&mut self, token: &Token) -> Option<Attributes> {
+	pub fn parse_function_attribute(&mut self, token: &Token) -> Result<Option<Attribute>> {
 		match *token {
 			Token::Identifier(ref identifier) => match identifier.as_str() {
-				"cold" => Some(ATTR_COLD),
-				"hot" => Some(ATTR_HOT),
-				"strictfp" => Some(ATTR_STRICTFP),
-				"try_inline" => Some(ATTR_TRY_INLINE),
-				"force_inline" => Some(ATTR_FORCE_INLINE),
-				"method" => Some(ATTR_METHOD),
-				_ => None,
+				"cold" => Ok(Some(Attribute::Cold)),
+				"hot" => Ok(Some(Attribute::Hot)),
+				"strictfp" => Ok(Some(Attribute::Strictfp)),
+				"try_inline" => Ok(Some(Attribute::TryInline)),
+				"force_inline" => Ok(Some(Attribute::ForceInline)),
+				"method" => {
+					// Eat '['.
+					expect_token!(self.lexer.read_token()?, Token::OpenSquareBracket);
+					let attached_type: String = unwrap_identifier!(self);
+					// Eat ']'.
+					expect_token!(self.lexer.read_token()?, Token::CloseSquareBracket);
+					Ok(Some(Attribute::Method(attached_type)))
+				},
+				_ => Ok(None),
 			},
-			_ => None,
+			_ => Ok(None),
 		}
 	}
 

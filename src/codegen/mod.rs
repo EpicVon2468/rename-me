@@ -11,14 +11,7 @@ use inkwell::values::FunctionValue;
 
 use crate::errors::{ErrorSource, ICE, Phase};
 use crate::map_llvm_type_to_metadata;
-use crate::parser::fn_attrs::{
-	Attributes,
-	is_cold,
-	is_force_inline,
-	is_hot,
-	is_strictfp,
-	is_try_inline,
-};
+use crate::parser::fn_attrs::Attributes;
 use crate::parser::function::FunctionDeclaration;
 use crate::parser::modifiers::{Modifiers, is_external, is_private};
 use crate::types::{__Type, AsLLVMType as _, LLVMType};
@@ -119,7 +112,7 @@ impl<'ctx> CodeGen<'ctx> {
 		let module: &'funct Module<'funct> = unsafe { self.coerce_module() };
 		let value: FunctionValue<'funct> = module.add_function(parsed.identifier(), ty, linkage);
 		{
-			let attributes: Attributes = parsed.attributes();
+			let attributes: &Attributes = parsed.attributes();
 			macro_rules! add_function_attr {
 				($attr:literal) => {
 					value.add_attribute(
@@ -128,19 +121,19 @@ impl<'ctx> CodeGen<'ctx> {
 					);
 				};
 			}
-			if is_cold(attributes) {
+			if attributes.is_cold() {
 				add_function_attr!("cold");
 			};
-			if is_hot(attributes) {
+			if attributes.is_hot() {
 				add_function_attr!("hot");
 			};
-			if is_strictfp(attributes) {
+			if attributes.is_strictfp() {
 				add_function_attr!("strictfp");
 			};
-			if is_try_inline(attributes) {
+			if attributes.is_try_inline() {
 				add_function_attr!("inlinehint");
 			};
-			if is_force_inline(attributes) {
+			if attributes.is_force_inline() {
 				add_function_attr!("alwaysinline");
 			};
 		};

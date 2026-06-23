@@ -91,7 +91,6 @@ pub fn main() -> Result<()> {
 			let _ = dbg!(parser.parse_expr()?);
 		};
 		let function: FunctionDeclaration = {
-			// #(method[MyStruct])
 			let mut input: &[u8] = b"#(hot, strictfp, force_inline) const funct main(): i32;";
 			let mut parser: Parser = Source::into(&mut input);
 			let TopLevel::Function(function): TopLevel = dbg!(parser.parse()?);

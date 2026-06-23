@@ -8,7 +8,9 @@ ATTR_TRY_INLINE : 't' 'r' 'y' '_' 'i' 'n' 'l' 'i' 'n' 'e' ;
 
 ATTR_FORCE_INLINE : 'f' 'o' 'r' 'c' 'e' '_' 'i' 'n' 'l' 'i' 'n' 'e' ;
 
-attr : ATTR_COLD | ATTR_HOT | ATTR_STRICT_FP | ATTR_TRY_INLINE | ATTR_FORCE_INLINE ;
+ATTR_METHOD : 'm' 'e' 't' 'h' 'o' 'd' '[' IDENTIFIER ']' ;
+
+attr : ATTR_COLD | ATTR_HOT | ATTR_STRICT_FP | ATTR_TRY_INLINE | ATTR_FORCE_INLINE | ATTR_METHOD ;
 
 functionAttrs :
 	HASH

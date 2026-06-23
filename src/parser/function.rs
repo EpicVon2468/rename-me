@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Formatter};
 
-use crate::parser::fn_attrs::{Attributes, fmt_attributes};
+use crate::parser::fn_attrs::Attributes;
 use crate::parser::modifiers::{Modifiers, fmt_modifiers};
 use crate::types::{__Type, AsLLVMType};
 
@@ -38,8 +38,8 @@ impl FunctionDeclaration {
 	}
 
 	#[must_use]
-	pub const fn attributes(&self) -> Attributes {
-		self.attributes
+	pub const fn attributes(&self) -> &Attributes {
+		&self.attributes
 	}
 
 	#[must_use]
@@ -64,9 +64,7 @@ impl Debug for FunctionDeclaration {
 			.field_with("modifiers", |fmt: &mut Formatter<'_>| {
 				fmt_modifiers(self.modifiers, fmt)
 			})
-			.field_with("attributes", |fmt: &mut Formatter<'_>| {
-				fmt_attributes(self.attributes, fmt)
-			})
+			.field("attributes", &self.attributes)
 			.field("identifier", &self.identifier)
 			.field("parameters", &self.parameters)
 			.field("return_type", &self.return_type)
