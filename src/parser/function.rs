@@ -14,6 +14,15 @@ pub struct FunctionDeclaration {
 	return_type: __Type,
 }
 
+// FIXME(stub): How should comparsion of types be implemented?
+impl PartialEq for FunctionDeclaration {
+	fn eq(&self, other: &Self) -> bool {
+		self.modifiers == other.modifiers
+			&& self.attributes == other.attributes
+			&& self.identifier == other.identifier
+	}
+}
+
 impl FunctionDeclaration {
 	pub fn new(
 		modifiers: Modifiers,

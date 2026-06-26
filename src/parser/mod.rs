@@ -63,8 +63,9 @@ use fn_attrs::{Attribute, Attributes};
 use function::FunctionDeclaration;
 use modifiers::{MOD_CONSTANT, MOD_EXTERNAL, MOD_PRIVATE, MOD_UNSAFE, Modifiers};
 
+/// `topLevel : functionDecl ;`
 #[must_use]
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 #[repr(transparent)]
 pub enum TopLevel {
 	Function(FunctionDeclaration),
@@ -82,6 +83,7 @@ pub enum Stmt {
 	Unit(Expr),
 }
 
+/// `expr : addExpr | subExpr | mulExpr | divExpr | unaryExpr | functionCallExpr | variableRefExpr | blockExpr ;`
 #[must_use]
 #[derive(Debug)]
 pub enum Expr {
@@ -97,23 +99,28 @@ pub enum Expr {
 	Unary(Unary, Box<Self>),
 	/// `functionCallExpr : IDENTIFIER OPEN_BRACKET ( expr ( COMMA expr )* )? CLOSE_BRACKET ;`
 	FunctionCall(String, Vec<Self>),
+	/// `variableRefExpr : IDENTIFIER ;`
 	VariableRef(String),
 	/// `blockExpr : ( CONSTANT? UNSAFE? )? OPEN_CURLY stmt* expr CLOSE_CURLY ;`
 	Block(Modifiers, Vec<Stmt>, Box<Self>),
 	IntegerLiteral(u128),
-	// FIXME: Use f128 once RustRover supports it (LLVM has explicit support for it).
+	// FIXME: Use f128 once stable (enough)
 	FloatLiteral(f64),
 }
 
 #[derive(Debug, Display)]
 pub enum Term {
+	/// `+`
 	Add,
+	/// `-`
 	Sub,
 }
 
 #[derive(Debug, Display)]
 pub enum Factor {
+	/// `*`
 	Mul,
+	/// `/`
 	Div,
 }
 
@@ -153,6 +160,17 @@ macro_rules! handle_erroneous {
 	}};
 }
 
+macro_rules! eat_unexpected_token {
+	($self:expr) => {{
+		unexpected_token!(
+			$self
+				.lexer
+				.read_token()
+				.expect("Unreachable panic, this read is cached."),
+		)
+	}};
+}
+
 #[derive_const(Constructor)]
 pub struct Parser<'src> {
 	lexer: Lexer<'src>,
@@ -166,7 +184,7 @@ const impl<'src> From<Lexer<'src>> for Parser<'src> {
 
 const impl<'src> From<Source<'src>> for Parser<'src> {
 	fn from(value: Source<'src>) -> Self {
-		Self::new(value.into())
+		Self::new(<Lexer<'src>>::from(value))
 	}
 }
 
@@ -230,11 +248,7 @@ impl Parser<'_> {
 				modifiers |= MOD_UNSAFE;
 				try_eat_extern!();
 			},
-			_ => unexpected_token!(
-				self.lexer
-					.read_token()
-					.expect("Unreachable panic, this read is cached."),
-			),
+			_ => eat_unexpected_token!(self),
 		};
 		// Eat 'funct'.
 		expect_token!(self.lexer.read_token()?, Token::Function);
@@ -244,11 +258,23 @@ impl Parser<'_> {
 		let return_type: __Type = if *self.lexer.peek_token()? == Token::Colon {
 			// Eat ':'.
 			let _ = self.lexer.read_token();
-			// Eat `return_type`.
-			let return_type: String = unwrap_identifier!(self);
-			self.lookup_type(&return_type)?
+			self.parse_type()?
 		} else {
 			Box::new(__Void::instance())
+		};
+		match *self.lexer.peek_token()? {
+			Token::Semicolon => {
+				// Eat ';'.
+				let _ = self.lexer.read_token();
+			},
+			Token::OpenCurlyBracket => {
+				// TODO:
+				// Attach this to function declaration?
+				// What happens if a function is declared twice?
+				// Implement a lookup for existing declarations?
+				let _ = dbg!(self.parse_block_expr()?);
+			},
+			_ => eat_unexpected_token!(self),
 		};
 		let declaration: FunctionDeclaration =
 			FunctionDeclaration::new(modifiers, attributes, identifier, parameters, return_type);
@@ -265,7 +291,26 @@ impl Parser<'_> {
 			let _ = self.lexer.read_token();
 			return Ok(Vec::new());
 		};
-		todo!()
+
+		let mut result: Vec<(String, __Type)> =
+			Vec::with_capacity(const_num_env!("__PARAM_DECL_BUF_CAPACITY", 4));
+		loop {
+			let Token::Identifier(_) = *self.lexer.peek_token()? else {
+				// Eat ')'.
+				expect_token!(self.lexer.read_token()?, Token::CloseBracket);
+				break;
+			};
+			let identifier: String = unwrap_identifier!(self);
+			// Eat ':'.
+			expect_token!(self.lexer.read_token()?, Token::Colon);
+			let param_type: __Type = self.parse_type()?;
+			result.push((identifier, param_type));
+			if *self.lexer.peek_token()? == Token::Comma {
+				// Eat ','.
+				let _ = self.lexer.read_token();
+			};
+		}
+		Ok(result)
 	}
 
 	pub fn parse_function_attrs(&mut self) -> Result<Attributes> {
@@ -418,14 +463,13 @@ impl Parser<'_> {
 		};
 
 		let mut parameters: Vec<Expr> =
-			Vec::with_capacity(const_num_env!("__PARAM_BUF_CAPACITY", 4));
+			Vec::with_capacity(const_num_env!("__PARAM_CALL_BUF_CAPACITY", 4));
 		loop {
 			parameters.push(self.parse_primary_expr()?);
-			let token: Token = self.lexer.read_token()?;
-			if token == Token::CloseBracket {
-				break;
-			} else if token != Token::Comma {
-				unexpected_token!(token);
+			match self.lexer.read_token()? {
+				Token::CloseBracket => break,
+				Token::Comma => (),
+				unexpected => unexpected_token!(unexpected),
 			};
 		}
 		Ok(Expr::FunctionCall(identifier, parameters))
@@ -461,11 +505,7 @@ impl Parser<'_> {
 				let _ = self.lexer.read_token();
 				Expr::FloatLiteral(value)
 			},
-			_ => unexpected_token!(
-				self.lexer
-					.read_token()
-					.expect("Unreachable panic, this read is cached."),
-			),
+			_ => eat_unexpected_token!(self),
 		};
 		Ok(expr)
 	}
@@ -491,9 +531,49 @@ impl Parser<'_> {
 			Token::OpenCurlyBracket => (),
 			unexpected => unexpected_token!(unexpected),
 		};
-		let mut result: Vec<Stmt> = Vec::with_capacity(const_num_env!("__BLOCK_BUF_CAPACITY", 4));
-		let expr: Expr = Expr::Block(modifiers, todo!(), todo!());
+		let mut stmts: Vec<Stmt> = Vec::with_capacity(const_num_env!("__BLOCK_BUF_CAPACITY", 4));
+		let result_expr: Expr = loop {
+			if let Some(expr) = self.parse_block_body(&mut stmts)? {
+				// Eat '}'.
+				expect_token!(self.lexer.read_token()?, Token::CloseCurlyBracket);
+				break expr;
+			};
+		};
+		let expr: Expr = Expr::Block(modifiers, stmts, Box::new(result_expr));
 		Ok(expr)
+	}
+
+	pub fn parse_block_body(&mut self, dest: &mut Vec<Stmt>) -> Result<Option<Expr>> {
+		match *self.lexer.peek_token()? {
+			Token::Val => dest.push(self.parse_variable_stmt()?),
+			Token::Identifier(_) => {
+				let identifier: String = unwrap_identifier!(self);
+				match self.lexer.read_token()? {
+					Token::Equals => {
+						let expr: Expr = self.parse_expr()?;
+						// Eat ';'.
+						expect_token!(self.lexer.read_token()?, Token::Semicolon);
+						dest.push(Stmt::Assignment(identifier, expr));
+					},
+					Token::CloseCurlyBracket => return Ok(Some(Expr::VariableRef(identifier))),
+					Token::Semicolon => dest.push(Stmt::Unit(Expr::VariableRef(identifier))),
+					unexpected => unexpected_token!(unexpected),
+				};
+			},
+			// TODO(diagnostic): "Block expr must consist of at least one expr".
+			Token::CloseCurlyBracket => unexpected_token!(Token::CloseCurlyBracket),
+			_ => {
+				let expr: Expr = self.parse_expr()?;
+				if matches!(self.lexer.peek_token()?, Token::Semicolon) {
+					// Eat ';'.
+					let _ = self.lexer.read_token();
+					dest.push(Stmt::Unit(expr));
+				} else {
+					return Ok(Some(expr));
+				};
+			},
+		};
+		Ok(None)
 	}
 
 	pub fn parse_stmt(&mut self) -> Result<Stmt> {
@@ -510,21 +590,20 @@ impl Parser<'_> {
 		expect_token!(self.lexer.read_token()?, Token::Val);
 		// Eat `identifier`.
 		let identifier: String = unwrap_identifier!(self);
-		let assignment: Option<Expr> = if *self.lexer.peek_token()? == Token::Semicolon {
-			// Eat ';'.
-			let _ = self.lexer.read_token();
-			None
-		} else {
-			// Eat '='.
-			expect_token!(self.lexer.read_token()?, Token::Equals);
-			let Stmt::Unit(expr): Stmt = self.parse_unit_stmt()? else {
-				// SANITY(unreachable): The matched function always returns `Stmt::Unit`.
-				unreachable_ice!(
-					"`Parser::parse_unit_stmt` should have returned `Stmt::Unit`!",
-					Parsing,
-				);
-			};
-			Some(expr)
+		// TODO: types on variables
+		let assignment: Option<Expr> = match self.lexer.read_token()? {
+			Token::Semicolon => None,
+			Token::Equals => {
+				let Stmt::Unit(expr): Stmt = self.parse_unit_stmt()? else {
+					// SANITY(unreachable): The matched function always returns `Stmt::Unit`.
+					unreachable_ice!(
+						"`Parser::parse_unit_stmt` should have returned `Stmt::Unit`!",
+						Parsing,
+					);
+				};
+				Some(expr)
+			},
+			unexpected => unexpected_token!(unexpected),
 		};
 		Ok(Stmt::Variable(identifier, assignment))
 	}
@@ -549,6 +628,12 @@ impl Parser<'_> {
 		// Eat ';'.
 		expect_token!(self.lexer.read_token()?, Token::Semicolon);
 		Ok(Stmt::Unit(expr))
+	}
+
+	// FIXME: Pointers & arrays / slices
+	pub fn parse_type(&mut self) -> Result<__Type> {
+		let type_name: String = unwrap_identifier!(self);
+		self.lookup_type(&type_name)
 	}
 }
 

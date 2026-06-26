@@ -170,7 +170,7 @@ impl<'src> Lexer<'src> {
 		if self.cached_for_shebang.is_some() {
 			// SANITY: This will only occur once.
 			cold_path();
-			// SAFETY:
+			// SAFETY: The above check confirms that `self.cached_for_shebang` is `Some(_)`
 			return Ok(unsafe { self.cached_for_shebang.take().unwrap_unchecked() });
 		};
 		let first: char = self.next_sig_char()?;

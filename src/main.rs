@@ -72,6 +72,8 @@ pub mod errors;
 pub mod lexer;
 pub mod macros;
 pub mod parser;
+#[cfg(test)]
+pub mod tests;
 pub mod types;
 
 use anyhow::Result;
@@ -91,7 +93,7 @@ pub fn main() -> Result<()> {
 			let _ = dbg!(parser.parse_expr()?);
 		};
 		let function: FunctionDeclaration = {
-			let mut input: &[u8] = b"#(hot, strictfp, force_inline) const funct main(): i32;";
+			let mut input: &[u8] = include_bytes!("../examples/main");
 			let mut parser: Parser = Source::into(&mut input);
 			let TopLevel::Function(function): TopLevel = dbg!(parser.parse()?);
 			function

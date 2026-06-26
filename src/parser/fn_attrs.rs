@@ -9,6 +9,7 @@ macro_rules! is_attr {
 	};
 }
 
+#[derive(PartialEq, Eq)]
 #[derive_const(Default)]
 pub struct Attributes {
 	state: u8,
@@ -26,6 +27,12 @@ impl Attributes {
 	#[must_use]
 	pub const fn contains(&self, attribute: &Attribute) -> bool {
 		self.state & attribute.discriminant() != 0
+	}
+
+	#[must_use]
+	pub fn with_attr(mut self, attribute: Attribute) -> Self {
+		self |= attribute;
+		self
 	}
 }
 
