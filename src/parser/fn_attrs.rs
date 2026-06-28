@@ -25,6 +25,25 @@ impl Attributes {
 	is_attr!(is_method, ATTR_METHOD);
 
 	#[must_use]
+	pub fn purity(&self) -> Option<bool> {
+		if self.state & ATTR_PURITY == 0 {
+			return None;
+		};
+		let data: Option<&Attribute> = self
+			.attached_data
+			.iter()
+			.find(|data: &&Attribute| matches!(data, Attribute::Purity(_)));
+		debug_assert!(data.is_some());
+		let Some(&Attribute::Purity(purity)) = data else {
+			std::hint::cold_path();
+			unreachable!(
+				"Data was marked as present in attribute state, but was not actually present!",
+			);
+		};
+		Some(purity)
+	}
+
+	#[must_use]
 	pub const fn contains(&self, attribute: &Attribute) -> bool {
 		self.state & attribute.discriminant() != 0
 	}
@@ -68,6 +87,7 @@ impl Debug for Attributes {
 			.field("is_try_inline", &self.is_try_inline())
 			.field("is_force_inline", &self.is_force_inline())
 			.field("is_method", &self.is_method())
+			.field("explicit_purity", &self.purity())
 			.finish()
 	}
 }
@@ -86,12 +106,14 @@ pub enum Attribute {
 	/// [`llvm.alwaysinline`](https://llvm.org/docs/LangRef.html#function-attributes:~:text=alwaysinline,-This)
 	ForceInline = ATTR_FORCE_INLINE,
 	Method(String) = ATTR_METHOD,
+	/// Whether a function is effectful (impure) or effectless (pure).
+	Purity(bool) = ATTR_PURITY,
 }
 
 impl Attribute {
 	#[must_use]
 	pub const fn carries_data(&self) -> bool {
-		matches!(self, Self::Method(_))
+		matches!(self, Self::Method(_) | Self::Purity(_))
 	}
 
 	// Taken from `std::mem::discriminant`'s docs.
@@ -110,3 +132,4 @@ pub const ATTR_STRICTFP: u8 = 0b0000_0100;
 pub const ATTR_TRY_INLINE: u8 = 0b0000_1000;
 pub const ATTR_FORCE_INLINE: u8 = 0b0001_0000;
 pub const ATTR_METHOD: u8 = 0b0010_0000;
+pub const ATTR_PURITY: u8 = 0b0100_0000;

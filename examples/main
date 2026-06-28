@@ -1,5 +1,6 @@
 #! /usr/bin/env rename-me
 
+#(unsafe(pure))
 #(hot, strictfp, force_inline)
 const funct main(argv: i32): i32 {
 	-1

@@ -184,7 +184,7 @@ const impl<'src> From<Lexer<'src>> for Parser<'src> {
 
 const impl<'src> From<Source<'src>> for Parser<'src> {
 	fn from(value: Source<'src>) -> Self {
-		Self::new(<Lexer<'src>>::from(value))
+		Self::new(Lexer::from(value))
 	}
 }
 
@@ -194,7 +194,7 @@ impl Parser<'_> {
 	}
 
 	pub fn parse_top_level(&mut self) -> Result<TopLevel> {
-		let mut modifiers: Modifiers = 0;
+		let mut modifiers: Modifiers = Modifiers::default();
 		macro_rules! try_eat_extern {
 			() => {
 				if *self.lexer.peek_token()? == Token::External {
@@ -218,7 +218,9 @@ impl Parser<'_> {
 			if self.lexer.try_eat_shebang()? {
 				return self.parse_top_level();
 			};
-			self.parse_function_attrs()?
+			let mut attributes: Attributes = Attributes::default();
+			self.parse_function_attrs(&mut attributes)?;
+			attributes
 		} else {
 			Attributes::default()
 		};
@@ -313,58 +315,67 @@ impl Parser<'_> {
 		Ok(result)
 	}
 
-	pub fn parse_function_attrs(&mut self) -> Result<Attributes> {
+	pub fn parse_function_attrs(&mut self, output: &mut Attributes) -> Result<()> {
 		// Eat '#'.
 		expect_token!(self.lexer.read_token()?, Token::Hash);
 		// Eat '('.
 		expect_token!(self.lexer.read_token()?, Token::OpenBracket);
-
-		let mut output: Attributes = Attributes::default();
 		loop {
-			let token: Token = self.lexer.read_token()?;
-			if let Some(attr) = self.parse_function_attribute(&token)? {
-				output |= attr;
-				match self.lexer.read_token()? {
-					Token::Comma => {
-						// Don't try to continue if the next token is ')'.
-						if *self.lexer.peek_token()? == Token::CloseBracket {
-							// Eat ')'.
-							let _ = self.lexer.read_token();
-							break;
-						};
-						continue;
-					},
-					Token::CloseBracket => break,
-					unexpected => unexpected_token!(unexpected),
-				};
+			*output |= self.parse_function_attribute()?;
+			match self.lexer.read_token()? {
+				Token::Comma => {
+					// Don't try to continue if the next token is ')'.
+					if *self.lexer.peek_token()? == Token::CloseBracket {
+						// Eat ')'.
+						let _ = self.lexer.read_token();
+						break;
+					};
+				},
+				Token::CloseBracket => break,
+				unexpected => unexpected_token!(unexpected),
 			};
-			unexpected_token!(token);
 		}
 		if *self.lexer.peek_token()? == Token::Hash {
-			output |= self.parse_function_attrs()?;
+			self.parse_function_attrs(output)?;
 		};
-		Ok(output)
+		Ok(())
 	}
 
-	pub fn parse_function_attribute(&mut self, token: &Token) -> Result<Option<Attribute>> {
-		match *token {
-			Token::Identifier(ref identifier) => match identifier.as_str() {
-				"cold" => Ok(Some(Attribute::Cold)),
-				"hot" => Ok(Some(Attribute::Hot)),
-				"strictfp" => Ok(Some(Attribute::Strictfp)),
-				"try_inline" => Ok(Some(Attribute::TryInline)),
-				"force_inline" => Ok(Some(Attribute::ForceInline)),
+	pub fn parse_function_attribute(&mut self) -> Result<Attribute> {
+		let token: Token = self.lexer.read_token()?;
+		match token {
+			Token::Identifier(identifier) => match identifier.as_str() {
+				"cold" => Ok(Attribute::Cold),
+				"hot" => Ok(Attribute::Hot),
+				"strictfp" => Ok(Attribute::Strictfp),
+				"try_inline" => Ok(Attribute::TryInline),
+				"force_inline" => Ok(Attribute::ForceInline),
 				"method" => {
 					// Eat '['.
 					expect_token!(self.lexer.read_token()?, Token::OpenSquareBracket);
 					let attached_type: String = unwrap_identifier!(self);
 					// Eat ']'.
 					expect_token!(self.lexer.read_token()?, Token::CloseSquareBracket);
-					Ok(Some(Attribute::Method(attached_type)))
+					Ok(Attribute::Method(attached_type))
 				},
-				_ => Ok(None),
+				// SANITY(unusual): Parital move means we can't just pass `token`.
+				_ => unexpected_token!(Token::Identifier(identifier)),
 			},
-			_ => Ok(None),
+			Token::Unsafe => {
+				// Eat '('.
+				expect_token!(self.lexer.read_token()?, Token::OpenBracket);
+				let attribute: Attribute = match self.lexer.read_token()? {
+					Token::Identifier(identifier) if identifier == "pure" =>
+						Attribute::Purity(true),
+					Token::Identifier(identifier) if identifier == "impure" =>
+						Attribute::Purity(false),
+					unexpected => unexpected_token!(unexpected),
+				};
+				// Eat ')'.
+				expect_token!(self.lexer.read_token()?, Token::CloseBracket);
+				Ok(attribute)
+			},
+			_ => unexpected_token!(token),
 		}
 	}
 
@@ -497,7 +508,7 @@ impl Parser<'_> {
 			},
 			Token::Real(ref real) => {
 				// Trim 'f' suffix so f64 can parse it.
-				let trimmed: &str = &real[0..(real.len() - 1)];
+				let trimmed: &str = &real[..(real.len() - 1)];
 				let value: f64 = trimmed
 					.parse()
 					.context("Couldn't parse floating-point literal.")?;
@@ -511,7 +522,7 @@ impl Parser<'_> {
 	}
 
 	pub fn parse_block_expr(&mut self) -> Result<Expr> {
-		let mut modifiers: Modifiers = 0;
+		let mut modifiers: Modifiers = Modifiers::default();
 		match self.lexer.read_token()? {
 			Token::Constant => {
 				modifiers |= MOD_CONSTANT;
