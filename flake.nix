@@ -28,8 +28,6 @@
 						llvmPkgs.libllvm
 						llvmPkgs.bintools
 						llvmPkgs.clang
-						pkgs.helix
-						pkgs.rust-analyzer
 					];
 					LIB_LLVM = llvmPkgs.llvm.lib.outPath;
 					DEV_LLVM = llvmPkgs.llvm.dev.outPath;
