@@ -48,11 +48,22 @@ impl AsLLVMType for __Type {
 
 crate::zst_singleton!(__Void, void_type);
 crate::zst_singleton!(__Boolean, bool_type);
+crate::zst_singleton!(__Ptr);
+
+impl AsLLVMType for __Ptr {
+	fn as_llvm_type<'ctx>(&self, context: &'ctx Context) -> LLVMType<'ctx> {
+		context.ptr_type(Default::default()).into()
+	}
+}
 
 // https://doc.rust-lang.org/nomicon/exotic-sizes.html#zero-sized-types-zsts
 #[macro_export]
 macro_rules! zst_singleton {
 	($__type:ident, $type_fn:ident $(,)? $(#[$attr:meta])*) => {
+		$crate::zst_singleton!($__type $(#[$attr])*);
+		$crate::simple_type_impl!($__type, $type_fn);
+	};
+	($__type:ident $(,)? $(#[$attr:meta])*) => {
 		$(#[$attr])*
 		#[derive(Debug)]
 		#[must_use]
@@ -89,7 +100,6 @@ macro_rules! zst_singleton {
 			}
 		}
 
-		$crate::simple_type_impl!($__type, $type_fn);
 	};
 }
 

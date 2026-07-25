@@ -26,8 +26,6 @@
 					buildInputs = [
 						llvmPkgs.llvm
 						llvmPkgs.libllvm
-						llvmPkgs.bintools
-						llvmPkgs.clang
 					];
 					LIB_LLVM = llvmPkgs.llvm.lib.outPath;
 					DEV_LLVM = llvmPkgs.llvm.dev.outPath;

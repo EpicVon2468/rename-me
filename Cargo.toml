@@ -5,7 +5,7 @@ authors = [
 	"Mavity The Madity",
 ]
 edition = "2024"
-rust-version = "1.98.0"
+rust-version = "1.99.0"
 description = "Foo bar baz"
 homepage = "https://github.com/EpicVon2468/rename-me/"
 repository = "https://github.com/EpicVon2468/rename-me/"
@@ -14,6 +14,16 @@ exclude = [
 	".github/",
 ]
 
+[[bin]]
+name = "renamec"
+path = "src/main.rs"
+test = true
+doctest = true
+bench = true
+doc = true
+proc-macro = false
+harness = true
+
 [package.metadata.dist]
 dist = true
 # https://github.com/axodotdev/cargo-dist/issues/745
@@ -21,7 +31,7 @@ dist = true
 #]
 
 [dependencies.anyhow]
-version = ">=1.0.102, <2"
+version = ">=1.0.104, <2"
 
 [dependencies.inkwell]
 version = ">=0.9.0, <1"
@@ -31,8 +41,6 @@ features = [
 	"target-x86",
 	"target-arm",
 	"target-aarch64",
-	"target-amdgpu",
-	"target-nvptx",
 	"target-powerpc",
 	"target-riscv",
 	"target-loongarch",
@@ -40,7 +48,7 @@ features = [
 default-features = false
 
 [dependencies.thiserror]
-version = ">=2.0.18, <3"
+version = ">=2.0.19, <3"
 
 [dependencies.derive_more]
 version = ">=2.1.1, <3"
@@ -48,6 +56,9 @@ features = [
 	"constructor",
 	"display",
 ]
+
+[build-dependencies.roff]
+version = ">=1.1.1, <2"
 
 [patch.crates-io]
 inkwell = {
@@ -57,4 +68,4 @@ inkwell = {
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"
-lto = "thin"
+lto = "fat"

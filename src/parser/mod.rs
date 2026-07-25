@@ -18,7 +18,7 @@ use crate::types::integers::{
 	__128BitInteger,
 	__Size,
 };
-use crate::types::{__Boolean, __Type, __Void};
+use crate::types::{__Boolean, __Ptr, __Type, __Void};
 use crate::{const_num_env, expect_token, unexpected_token, unreachable_ice, unwrap_identifier};
 
 macro_rules! bitflag {
@@ -641,10 +641,23 @@ impl Parser<'_> {
 		Ok(Stmt::Unit(expr))
 	}
 
-	// FIXME: Pointers & arrays / slices
+	// FIXME: (Typed) pointers & arrays / slices
 	pub fn parse_type(&mut self) -> Result<__Type> {
-		let type_name: String = unwrap_identifier!(self);
-		self.lookup_type(&type_name)
+		if let Token::Identifier(_) = *self.lexer.peek_token()? {
+			let type_name: String = unwrap_identifier!(@[unreachable = ICE] self);
+			return self.lookup_type(&type_name);
+		};
+		let _pointee_type_name: String = loop {
+			match self.lexer.read_token()? {
+				Token::Identifier(type_name) => break type_name,
+				Token::Asterisk => match self.lexer.read_token()? {
+					Token::Constant => (),
+					unexpected => unexpected_token!(unexpected),
+				},
+				unexpected => unexpected_token!(unexpected),
+			};
+		};
+		Ok(Box::new(__Ptr::instance()))
 	}
 }
 
