@@ -1,4 +1,6 @@
-use std::{env::var as env, fs::File};
+#![allow(non_snake_case)]
+
+use std::{collections::VecDeque, env::var as env, fs::File};
 
 use roff::{Inline, Roff, bold, italic, line_break, roman};
 
@@ -59,155 +61,223 @@ fn name_section(roff: &mut Roff) {
 	roff.text([roman(format!("{PROGRAM} – the rename-me compiler"))]);
 }
 
+// target tuple
+fn __target__long() -> [Inline; 3] {
+	[bold("--target"), roman("="), italic("tuple")]
+}
+fn __target_native__long() -> [Inline; 1] {
+	[bold("--native-target")]
+}
+
+// verbose
+fn __verbose__short() -> [Inline; 1] {
+	[bold("-v")]
+}
+fn __verbose__long() -> [Inline; 1] {
+	[bold("--verbose")]
+}
+
+// rpath
+fn __rpath__long() -> [Inline; 3] {
+	[bold("--rpath"), roman("="), italic("value")]
+}
+
+// pass runner
+fn __pass_runner__long() -> [Inline; 2] {
+	[bold("--pass-runner"), roman("={integrated|opt}")]
+}
+
+// passes
+fn __passes__short() -> [Inline; 4] {
+	[bold("-p"), roman(" "), italic("pass"), roman("[,...]")]
+}
+fn __passes__long() -> [Inline; 4] {
+	[
+		bold("--passes"),
+		roman("="),
+		italic("pass"),
+		roman("[,...]"),
+	]
+}
+fn __no_default_passes__long() -> [Inline; 1] {
+	[bold("--no-default-passes")]
+}
+
+// optimisation level
+fn __optimise__short() -> [Inline; 4] {
+	[bold("-O"), roman(" ["), italic("level"), roman("]")]
+}
+fn __optimise__long() -> [Inline; 4] {
+	[bold("--optimise"), roman("[="), italic("level"), roman("]")]
+}
+fn __no_optimise__long() -> [Inline; 1] {
+	[bold("--no-optimise")]
+}
+
+// symbol stripping
+fn __strip__long() -> [Inline; 2] {
+	[
+		bold("--strip"),
+		roman("[={all|unneeded|locals|debug|none}[,...]]"),
+	]
+}
+fn __no_strip__long() -> [Inline; 1] {
+	[bold("--no-strip")]
+}
+
+// emit
+fn __emit__short() -> [Inline; 2] {
+	[bold("-e"), roman(" {elf-linked|elf-obj|asm|llvm-ir}")]
+}
+fn __emit__long() -> [Inline; 2] {
+	[bold("--emit"), roman("={elf-linked|elf-obj|asm|llvm-ir}")]
+}
+
+// output file
+fn __output__short() -> [Inline; 3] {
+	[bold("-o"), roman(" "), italic("file")]
+}
+fn __output__long() -> [Inline; 3] {
+	[bold("--output-file"), roman("="), italic("file")]
+}
+
+// help + version
+fn __help__short() -> [Inline; 1] {
+	[bold("-h")]
+}
+fn __help__long() -> [Inline; 1] {
+	[bold("--help")]
+}
+fn __version__short() -> [Inline; 1] {
+	[bold("-V")]
+}
+fn __version__long() -> [Inline; 1] {
+	[bold("--version")]
+}
+
+// [-- args...]
+fn __args__suffix() -> [Inline; 4] {
+	[bold("--"), roman(" "), italic("args"), roman("...")]
+}
+
 fn synopsis_section(roff: &mut Roff) {
+	macro_rules! option {
+		($option:expr, newline = true $(,)?) => {{
+			let mut inlines: VecDeque<Inline> = VecDeque::from([line_break(), roman("[")]);
+			inlines.extend($option);
+			inlines.push_back(roman("]"));
+			inlines
+		}};
+		($option:expr $(, newline = false)? $(,)?) => {{
+			let mut inlines: VecDeque<Inline> = VecDeque::from([roman("[")]);
+			inlines.extend($option);
+			inlines.push_back(roman("]"));
+			inlines
+		}};
+		($vec:expr, $option:expr, mode = OR, newline = true $(,)?) => {{
+			let mut inlines: VecDeque<Inline> = $vec;
+			inlines.push_front(line_break());
+			inlines.pop_back();
+			inlines.push_back(roman("|"));
+			inlines.extend($option);
+			inlines.push_back(roman("]"));
+			inlines
+		}};
+		($vec:expr, $option:expr, mode = OR $(, newline = false)? $(,)?) => {{
+			let mut inlines: VecDeque<Inline> = $vec;
+			inlines.pop_back();
+			inlines.push_back(roman("|"));
+			inlines.extend($option);
+			inlines.push_back(roman("]"));
+			inlines
+		}};
+		($vec:expr, $option:expr, mode = AND, newline = true $(,)?) => {{
+			let mut inlines: VecDeque<Inline> = $vec;
+			inlines.push_front(line_break());
+			inlines.push_back(roman(" ["));
+			inlines.extend($option);
+			inlines.push_back(roman("]"));
+			inlines
+		}};
+		($vec:expr, $option:expr, mode = AND $(, newline = false)? $(,)?) => {{
+			let mut inlines: VecDeque<Inline> = $vec;
+			inlines.push_back(roman(" ["));
+			inlines.extend($option);
+			inlines.push_back(roman("]"));
+			inlines
+		}};
+	}
+
 	roff.control("SH", ["SYNOPSIS"]);
 	roff.control("PP", []);
 	roff.text([bold(PROGRAM)]);
 	roff.control("RS", []);
-	{
-		// target triple
-		roff.text([
-			line_break(),
-			roman("["),
-			bold("--target"),
-			roman("="),
-			italic("triple"),
-			roman("] ["),
-			bold("--native-target"),
-			roman("]"),
-		]);
-	};
-	{
-		// verbose
-		roff.text([
-			line_break(),
-			roman("["),
-			bold("-v"),
-			roman("|"),
-			bold("--verbose"),
-			roman("]"),
-		]);
-	};
-	{
-		// RPATH
-		roff.text([
-			line_break(),
-			roman("["),
-			bold("--rpath"),
-			roman("="),
-			italic("value"),
-			roman("]"),
-		]);
-	};
-	{
-		// pass runner
-		roff.text([
-			line_break(),
-			roman("["),
-			bold("--pass-runner"),
-			roman("={integrated|opt}]"),
-		]);
-	};
-	{
-		// passes
-		roff.text([
-			line_break(),
-			roman("["),
-			bold("-p"),
-			roman(" "),
-			italic("pass"),
-			roman("[,...]|"),
-			bold("--passes"),
-			roman("="),
-			italic("pass"),
-			roman("[,...]] ["),
-			bold("--no-default-passes"),
-			roman("]"),
-		]);
-	};
-	{
-		// optimisation level
-		roff.text([
-			line_break(),
-			roman("["),
-			bold("-O"),
-			roman(" ["),
-			italic("level"),
-			roman("]|"),
-			bold("--optimise"),
-			roman("[="),
-			italic("level"),
-			roman("]] ["),
-			bold("--no-optimise"),
-			roman("]"),
-		]);
-	};
-	{
-		// symbol stripping
-		roff.text([
-			line_break(),
-			roman("["),
-			bold("--strip"),
-			roman("[={all|unneeded|locals|debug|none}[,...]]] ["),
-			bold("--no-strip"),
-			roman("]"),
-		]);
-	};
-	{
-		// emit
-		roff.text([
-			line_break(),
-			roman("["),
-			bold("-e"),
-			roman(" {elf-linked|elf-obj|asm|llvm-ir}|"),
-			bold("--emit"),
-			roman("={elf-linked|elf-obj|asm|llvm-ir}"),
-			roman("]"),
-		]);
-	};
-	{
-		// output file
-		roff.text([
-			line_break(),
-			roman("["),
-			bold("-o"),
-			roman(" "),
-			italic("file"),
-			roman("|"),
-			bold("--output-file"),
-			roman("="),
-			italic("file"),
-			roman("]"),
-		]);
-	};
-	{
-		// help + version
-		roff.text([
-			line_break(),
-			roman("["),
-			bold("--help"),
-			roman("] ["),
-			bold("-V"),
-			roman("|"),
-			bold("--version"),
-			roman("]"),
-		]);
-	};
-	{
-		// input file(s)
-		roff.text([line_break(), italic("file"), roman("...")]);
-	};
-	{
-		// args
-		roff.text([
-			line_break(),
-			roman("["),
-			bold("--"),
-			roman(" "),
-			italic("args"),
-			roman("...]"),
-		]);
-	};
+
+	roff.text(option!(
+		option!(__target__long()),
+		__target_native__long(),
+		mode = AND,
+		newline = true,
+	));
+
+	roff.text(option!(
+		option!(__verbose__short()),
+		__verbose__long(),
+		mode = OR,
+		newline = true,
+	));
+
+	roff.text(option!(__rpath__long(), newline = true));
+
+	roff.text(option!(__pass_runner__long(), newline = true));
+
+	roff.text(option!(
+		option!(option!(__passes__short()), __passes__long(), mode = OR),
+		__no_default_passes__long(),
+		mode = AND,
+		newline = true,
+	));
+
+	roff.text(option!(
+		option!(option!(__optimise__short()), __optimise__long(), mode = OR),
+		__no_optimise__long(),
+		mode = AND,
+		newline = true,
+	));
+
+	roff.text(option!(
+		option!(__strip__long()),
+		__no_strip__long(),
+		mode = AND,
+		newline = true,
+	));
+
+	roff.text(option!(
+		option!(__emit__short()),
+		__emit__long(),
+		mode = OR,
+		newline = true,
+	));
+
+	roff.text(option!(
+		option!(__output__short()),
+		__output__long(),
+		mode = OR,
+		newline = true,
+	));
+
+	roff.text(option!(
+		option!(option!(__help__short()), __help__long(), mode = OR),
+		option!(option!(__version__short()), __version__long(), mode = OR),
+		mode = AND,
+		newline = true,
+	));
+
+	// input file(s)
+	roff.text([line_break(), italic("file"), roman("...")]);
+
+	roff.text(option!(__args__suffix(), newline = true));
+
 	roff.control("RE", []);
 }
 
@@ -219,28 +289,37 @@ fn description_section(roff: &mut Roff) {
 
 fn options_section(roff: &mut Roff) {
 	macro_rules! option {
-		($name:expr $(,)?) => {
+		($($option:expr),* $(,)?) => {
 			roff.control("TP", []);
-			roff.text($name);
+			roff.text({
+				let mut inlines: Vec<Inline> = Vec::with_capacity(9);
+				$({
+					inlines.extend($option);
+					inlines.push(roman(", "));
+				};)*
+				inlines.pop();
+				inlines
+			});
+			// roff.text($name);
 			roff.control("RS", []);
 		};
 	}
 	roff.control("SH", ["OPTIONS"]);
 	roff.control("PP", []);
 	{
-		option!([bold("--target"), roman("="), italic("triple")]);
+		option!(__target__long());
 		roff.text([
 			roman("Specifies the "),
-			bold("target triple"),
-			roman(" for compilation."),
+			bold("target tuple"),
+			roman(" (target triple) for compilation."),
 			line_break(),
-			roman("Target triples take the form of "),
+			roman("Target tuples take the form of "),
 			bold("<architecture>-<vendor>-linux-<environment>"),
 			roman("."),
 			line_break(),
 			roman("Currently, "),
 			bold(PROGRAM),
-			roman("'s (officially) supported target triples are:"),
+			roman("'s (officially) supported target tuples are:"),
 		]);
 		const TRIPLES: [&'static str; 5] = [
 			"x86_64-unknown-linux-unknown",
@@ -281,11 +360,11 @@ fn options_section(roff: &mut Roff) {
 		roff.control("RE", []);
 	};
 	{
-		option!([bold("--native-target")]);
+		option!(__target_native__long());
 		roff.text([
 			roman("Sets the "),
-			bold("target triple"),
-			roman(" to the system's native target triple."),
+			bold("target tuple"),
+			roman(" to the system's native target tuple."),
 			line_break(),
 			roman("This is effectively equivalent to specifying "),
 			bold("--target=\"$(clang --print-target-triple)\""),
@@ -294,12 +373,12 @@ fn options_section(roff: &mut Roff) {
 		roff.control("RE", []);
 	};
 	{
-		option!([bold("-v"), roman(", "), bold("--verbose")]);
+		option!(__verbose__short(), __verbose__long());
 		roff.text([roman("Enables verbose debug printing.")]);
 		roff.control("RE", []);
 	};
 	{
-		option!([bold("--rpath"), roman("="), italic("value")]);
+		option!(__rpath__long());
 		roff.text([
 			roman("Sets the "),
 			bold("RPATH"),
@@ -312,7 +391,7 @@ fn options_section(roff: &mut Roff) {
 		roff.control("RE", []);
 	};
 	{
-		option!([bold("--pass-runner"), roman("={integrated|opt}")]);
+		option!(__pass_runner__long());
 		roff.control("RE", []);
 	};
 }
