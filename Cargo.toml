@@ -39,7 +39,6 @@ features = [
 	"llvm22-1-force-dynamic",
 	"nightly",
 	"target-x86",
-	"target-arm",
 	"target-aarch64",
 	"target-powerpc",
 	"target-riscv",
