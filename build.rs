@@ -1,12 +1,42 @@
 #![allow(non_snake_case)]
+#![feature(exit_status_error)]
 
-use std::{collections::VecDeque, env::var as env, fs::File};
+use std::{
+	collections::VecDeque,
+	env::var as env,
+	fs::File,
+	process::{Command, Output, Stdio},
+};
 
 use roff::{Inline, Roff, bold, italic, line_break, roman};
 
 const PROGRAM: &'static str = "renamec";
 
+fn compile_cxx() {
+	let llvm_config: String = match env("LLVM_SYS_221_PREFIX") {
+		Ok(prefix) => format!("{prefix}/bin/llvm-config"),
+		Err(_) => String::from("llvm-config"),
+	};
+	let output: Output = Command::new(llvm_config)
+		.arg("--cxxflags")
+		.stdout(Stdio::piped())
+		.spawn()
+		.expect("Failed to run `llvm-config`!")
+		.wait_with_output()
+		.expect("Failed to get ouput of `llvm-config`!")
+		.exit_ok()
+		.expect("`llvm-config` returned non-zero!");
+	let flags: Vec<String> = shell_words::split(str::from_utf8(&output.stdout).unwrap()).unwrap();
+	cc::Build::new()
+		.cpp(true)
+		.std("c++17")
+		.file("src/rename-me.c++")
+		.flags(flags)
+		.compile("rename-me-cc");
+}
+
 pub fn main() {
+	compile_cxx();
 	let mut page: Roff = Roff::new();
 	page.control(
 		"TH",
@@ -55,10 +85,22 @@ fn man_ref(roff: &mut Roff, refs: &[(&str, &str)]) {
 	roff.control("BR", [last.0, &format!("({})", last.1)]);
 }
 
+fn dot_point(roff: &mut Roff) {
+	roff.control("IP", ["\\(bu", "2"]);
+}
+
 fn name_section(roff: &mut Roff) {
 	roff.control("SH", ["NAME"]);
 	roff.control("PP", []);
 	roff.text([roman(format!("{PROGRAM} – the rename-me compiler"))]);
+}
+
+// jobs
+fn __jobs__short() -> [Inline; 3] {
+	[bold("-j"), roman(" "), italic("n")]
+}
+fn __jobs__long() -> [Inline; 3] {
+	[bold("--jobs"), roman("="), italic("n")]
 }
 
 // target tuple
@@ -214,6 +256,13 @@ fn synopsis_section(roff: &mut Roff) {
 	roff.control("RS", []);
 
 	roff.text(option!(
+		option!(__jobs__short()),
+		__jobs__long(),
+		mode = OR,
+		newline = true,
+	));
+
+	roff.text(option!(
 		option!(__target__long()),
 		__target_native__long(),
 		mode = AND,
@@ -307,6 +356,17 @@ fn options_section(roff: &mut Roff) {
 	roff.control("SH", ["OPTIONS"]);
 	roff.control("PP", []);
 	{
+		option!(__jobs__short(), __jobs__long());
+		roff.text([
+			roman("Specifies the number of parallel jobs to run."),
+			line_break(),
+			roman("The value of "),
+			italic("n"),
+			roman(" must be a positive integer."),
+		]);
+		roff.control("RE", []);
+	};
+	{
 		option!(__target__long());
 		roff.text([
 			roman("Specifies the "),
@@ -329,7 +389,7 @@ fn options_section(roff: &mut Roff) {
 			"loongarch64-unknown-linux-unknown",
 		];
 		for triple in TRIPLES {
-			roff.control("IP", ["\\(bu", "2"]);
+			dot_point(roff);
 			roff.text([bold(triple)]);
 		}
 		roff.control("PP", []);
@@ -353,7 +413,7 @@ fn options_section(roff: &mut Roff) {
 			"https://llvm.org/doxygen/classllvm_1_1Triple.html#details",
 		];
 		for src in FURTHER_READING {
-			roff.control("IP", ["\\(bu", "2"]);
+			dot_point(roff);
 			roff.control("UR", [src]);
 			roff.control("UE", []);
 		}
@@ -380,18 +440,42 @@ fn options_section(roff: &mut Roff) {
 	{
 		option!(__rpath__long());
 		roff.text([
-			roman("Sets the "),
-			bold("RPATH"),
+			roman("Specifies the "),
+			bold("RUNPATH"),
 			roman(" for the outputted dynamically linked elf file."),
 			line_break(),
 			roman("The value should consist of colon-delimited directories for "),
+			bold("ld.so"),
+			roman("(8) to look for libraries in."),
 		]);
-		man_ref(roff, &[("ld.so", "8")]);
-		roff.text([roman("to look for libraries in.")]);
 		roff.control("RE", []);
 	};
 	{
 		option!(__pass_runner__long());
+		roff.text([
+			roman("Specifies how LLVM optimisation passes should be ran."),
+			line_break(),
+			roman("Possible values:"),
+		]);
+		{
+			dot_point(roff);
+			roff.text([
+				bold("integrated"),
+				roman(": uses libLLVM to run optimisation passes in-process."),
+			]);
+			dot_point(roff);
+			roff.text([
+				bold("opt"),
+				roman(": Uses "),
+				bold("opt"),
+				roman("(1) to run optimisation passes externally."),
+			]);
+		};
+		roff.control("RE", []);
+	};
+	{
+		option!(__passes__short(), __passes__long());
+		roff.text([roman("Specifies the LLVM optimisation passes to run.")]);
 		roff.control("RE", []);
 	};
 }
@@ -426,7 +510,6 @@ fn alias_env_var(roff: &mut Roff, name: &str, actual: &str) {
 		roman(" is set, $"),
 		bold(name),
 		roman(" is ignored."),
-		line_break(),
 	]);
 	roff.control("RE", []);
 }
@@ -447,7 +530,6 @@ fn simple_env_var(roff: &mut Roff, name: &str, cli: &str, is_positional: bool) {
 		roman(" to the value of $"),
 		bold(name),
 		roman("."),
-		line_break(),
 	]);
 	roff.control("RE", []);
 }
@@ -481,10 +563,9 @@ fn command_env_var(
 	};
 	roff.text(text);
 	for (alt_name, alt_section) in good_alternatives {
-		roff.control("IP", ["\\(bu", "2"]);
+		dot_point(roff);
 		man_ref(roff, &[(alt_name, alt_section)])
 	}
-	roff.text([line_break()]);
 	roff.control("RE", []);
 }
 

@@ -139,9 +139,11 @@ name = "rename-me"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "cc",
  "derive_more",
  "inkwell",
  "roff",
+ "shell-words",
  "thiserror",
 ]
 
@@ -165,6 +167,12 @@ name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
+
+[[package]]
+name = "shell-words"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 
 [[package]]
 name = "shlex"

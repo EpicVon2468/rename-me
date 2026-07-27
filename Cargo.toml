@@ -59,6 +59,12 @@ features = [
 [build-dependencies.roff]
 version = ">=1.1.1, <2"
 
+[build-dependencies.cc]
+version = ">=1.4.0, <2"
+
+[build-dependencies.shell-words]
+version = ">=1.1.1, <2"
+
 [patch.crates-io]
 inkwell = {
 	git = "https://github.com/EpicVon2468/inkwell",

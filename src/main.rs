@@ -69,6 +69,7 @@
 #![doc = include_str!("../README.md")]
 pub mod codegen;
 pub mod errors;
+mod ffi;
 pub mod lexer;
 pub mod macros;
 pub mod parser;
@@ -79,6 +80,13 @@ pub mod types;
 use anyhow::Result;
 
 use inkwell::support::{enable_llvm_pretty_stack_trace, get_llvm_version, shutdown_llvm};
+use inkwell::targets::{
+	InitializationConfig as InitialisationConfig,
+	Target,
+	TargetMachine,
+	TargetMachineOptions,
+	TargetTriple as TargetTuple,
+};
 
 use crate::codegen::CodeGen;
 use crate::lexer::Source;
@@ -86,6 +94,22 @@ use crate::parser::function::FunctionDeclaration;
 use crate::parser::{Parser, TopLevel};
 
 pub fn main() -> Result<()> {
+	let config: InitialisationConfig = InitialisationConfig::default();
+	Target::initialize_x86(&config);
+	Target::initialize_aarch64(&config);
+	Target::initialize_power_pc(&config);
+	Target::initialize_riscv(&config);
+	Target::initialize_loongarch(&config);
+	let target: Target = Target::from_name("x86-64").unwrap();
+	let target_tuple: TargetTuple = TargetTuple::create("x86_64-pc-linux-gnu");
+	let options: TargetMachineOptions = TargetMachineOptions::default().set_cpu("x86-64");
+	let _target_machine: TargetMachine = target
+		.create_target_machine_from_options(&target_tuple, options)
+		.unwrap();
+	// SAFETY:
+	unsafe {
+		ffi::print_passes();
+	};
 	{
 		{
 			let mut input: &[u8] = b"1 + 42.0f * 2;";
