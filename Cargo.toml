@@ -1,6 +1,6 @@
 [package]
 name = "rename-me"
-version = "0.0.0"
+version = "0.0.0-git"
 authors = [
 	"Mavity The Madity",
 ]

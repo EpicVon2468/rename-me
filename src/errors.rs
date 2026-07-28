@@ -8,6 +8,21 @@ use crate::lexer::Token;
 
 #[must_use]
 #[derive(Debug, Error)]
+pub enum CLIError {
+	#[error("Invalid value {value:?} passed to '{arg_name}'!{}", if let Some(expected) = expected {
+		format!(" Expected {expected}.")
+	} else { String::new() })]
+	InvalidValue {
+		arg_name: &'static str,
+		value: String,
+		expected: Option<&'static str>,
+	},
+	#[error("Unexpected or unknown argument {arg_name:?} was found!")]
+	UnknownArgument { arg_name: String },
+}
+
+#[must_use]
+#[derive(Debug, Error)]
 #[derive_const(Constructor)]
 #[error(
 	"An Internal Compiler Error occurred whilst compiling {0}!  This is a compiler bug, not a bug your code!"

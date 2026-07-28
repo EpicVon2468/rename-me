@@ -10,6 +10,8 @@ use std::{
 
 use roff::{Inline, Roff, bold, italic, line_break, roman};
 
+use shell_words::{ParseError, split as parse};
+
 const PROGRAM: &'static str = "renamec";
 
 fn compile_cxx() {
@@ -26,9 +28,16 @@ fn compile_cxx() {
 		.expect("Failed to get ouput of `llvm-config`!")
 		.exit_ok()
 		.expect("`llvm-config` returned non-zero!");
-	let flags: Vec<String> = shell_words::split(str::from_utf8(&output.stdout).unwrap()).unwrap();
+	let stdout: &str = str::from_utf8(&output.stdout)
+		.expect("Failed to convert `llvm-config`'s stdout into UTF-8!");
+	let Ok(flags): Result<Vec<String>, ParseError> = parse(stdout) else {
+		unreachable!("Infeasible.");
+	};
 	cc::Build::new()
 		.cpp(true)
+		.warnings(false)
+		.extra_warnings(false)
+		.inherit_rustflags(false)
 		.std("c++17")
 		.file("src/rename-me.c++")
 		.flags(flags)
@@ -43,7 +52,7 @@ pub fn main() {
 		[
 			"RENAMEC",
 			"1",
-			"2026-07-26",
+			"2026-07-28",
 			concat!("rename-me ", env!("CARGO_PKG_VERSION")),
 		],
 	);
@@ -103,6 +112,14 @@ fn __jobs__long() -> [Inline; 3] {
 	[bold("--jobs"), roman("="), italic("n")]
 }
 
+// relocation mode
+fn __reloc_mode__long() -> [Inline; 2] {
+	[
+		bold("--reloc"),
+		roman("={default|static|pic|dynamic-no-pic}"),
+	]
+}
+
 // target tuple
 fn __target__long() -> [Inline; 3] {
 	[bold("--target"), roman("="), italic("tuple")]
@@ -127,6 +144,11 @@ fn __rpath__long() -> [Inline; 3] {
 // pass runner
 fn __pass_runner__long() -> [Inline; 2] {
 	[bold("--pass-runner"), roman("={integrated|opt}")]
+}
+
+// print passes
+fn __dump_passes__long() -> [Inline; 1] {
+	[bold("--dump-passes")]
 }
 
 // passes
@@ -241,7 +263,28 @@ fn synopsis_section(roff: &mut Roff) {
 			inlines.push_back(roman("]"));
 			inlines
 		}};
-		($vec:expr, $option:expr, mode = AND $(, newline = false)? $(,)?) => {{
+		($vec:expr, $option:expr, mode = AND, newline = true, wrap = false $(,)?) => {{
+			let mut inlines: VecDeque<Inline> = $vec;
+			inlines.push_front(line_break());
+			inlines.push_back(roman(" "));
+			inlines.extend($option);
+			inlines
+		}};
+		($vec:expr, $option:expr, mode = AND, newline = true $(, wrap = true)? $(,)?) => {{
+			let mut inlines: VecDeque<Inline> = $vec;
+			inlines.push_front(line_break());
+			inlines.push_back(roman(" ["));
+			inlines.extend($option);
+			inlines.push_back(roman("]"));
+			inlines
+		}};
+		($vec:expr, $option:expr, mode = AND $(, newline = false)? , wrap = false $(,)?) => {{
+			let mut inlines: VecDeque<Inline> = $vec;
+			inlines.push_back(roman(" "));
+			inlines.extend($option);
+			inlines
+		}};
+		($vec:expr, $option:expr, mode = AND $(, newline = false)? $(, wrap = true)? $(,)?) => {{
 			let mut inlines: VecDeque<Inline> = $vec;
 			inlines.push_back(roman(" ["));
 			inlines.extend($option);
@@ -261,6 +304,8 @@ fn synopsis_section(roff: &mut Roff) {
 		mode = OR,
 		newline = true,
 	));
+
+	roff.text(option!(__reloc_mode__long(), newline = true));
 
 	roff.text(option!(
 		option!(__target__long()),
@@ -282,9 +327,14 @@ fn synopsis_section(roff: &mut Roff) {
 
 	roff.text(option!(
 		option!(option!(__passes__short()), __passes__long(), mode = OR),
-		__no_default_passes__long(),
+		option!(
+			option!(__dump_passes__long()),
+			__no_default_passes__long(),
+			mode = AND,
+		),
 		mode = AND,
 		newline = true,
+		wrap = false,
 	));
 
 	roff.text(option!(
@@ -320,6 +370,7 @@ fn synopsis_section(roff: &mut Roff) {
 		option!(option!(__version__short()), __version__long(), mode = OR),
 		mode = AND,
 		newline = true,
+		wrap = false,
 	));
 
 	// input file(s)
@@ -367,6 +418,34 @@ fn options_section(roff: &mut Roff) {
 		roff.control("RE", []);
 	};
 	{
+		option!(__reloc_mode__long());
+		roff.text([
+			roman("Specifies the "),
+			bold("code relocation mode"),
+			roman(" for compilation."),
+			line_break(),
+			roman("Possible values:"),
+		]);
+		dot_point(roff);
+		roff.text([
+			bold("default"),
+			roman(": TODO: look into how LLVM decides the default."),
+		]);
+		dot_point(roff);
+		roff.text([bold("static"), roman(": Static relocation.")]);
+		dot_point(roff);
+		roff.text([
+			bold("pic"),
+			roman(": Dynamic relocation, with Position Independent Code."),
+		]);
+		dot_point(roff);
+		roff.text([
+			bold("dynamic-no-pic"),
+			roman(": Dynamic relocation, without Position Independent Code."),
+		]);
+		roff.control("RE", []);
+	};
+	{
 		option!(__target__long());
 		roff.text([
 			roman("Specifies the "),
@@ -405,7 +484,7 @@ fn options_section(roff: &mut Roff) {
 			roman("Non-Linux operating systems are not supported."),
 			line_break(),
 			line_break(),
-			roman("Further reading materials:"),
+			roman("Further reading:"),
 		]);
 		const FURTHER_READING: [&'static str; 3] = [
 			"https://mcyoung.xyz/2025/04/14/target-triples/",
@@ -453,7 +532,7 @@ fn options_section(roff: &mut Roff) {
 	{
 		option!(__pass_runner__long());
 		roff.text([
-			roman("Specifies how LLVM optimisation passes should be ran."),
+			roman("Specifies how LLVM optimisation & analysis passes should be ran."),
 			line_break(),
 			roman("Possible values:"),
 		]);
@@ -461,21 +540,77 @@ fn options_section(roff: &mut Roff) {
 			dot_point(roff);
 			roff.text([
 				bold("integrated"),
-				roman(": uses libLLVM to run optimisation passes in-process."),
+				roman(": uses libLLVM to run passes in-process."),
 			]);
 			dot_point(roff);
 			roff.text([
 				bold("opt"),
 				roman(": Uses "),
 				bold("opt"),
-				roman("(1) to run optimisation passes externally."),
+				roman("(1) to run passes externally."),
 			]);
 		};
 		roff.control("RE", []);
 	};
 	{
 		option!(__passes__short(), __passes__long());
-		roff.text([roman("Specifies the LLVM optimisation passes to run.")]);
+		roff.text([
+			roman("Specifies the LLVM optimisation & analysis passes to run."),
+			line_break(),
+			roman("This argument may be specified multiple times."),
+		]);
+		roff.control("RE", []);
+	};
+	{
+		option!(__dump_passes__long());
+		roff.text([roman(
+			"Prints all available LLVM optimisation & analysis passes, then terminates.",
+		)]);
+		roff.control("RE", []);
+	};
+	{
+		option!(__no_default_passes__long());
+		roff.text([roman(
+			"Disables automatic use of default LLVM optimisation & analysis passes.",
+		)]);
+		roff.control("RE", []);
+	};
+	{
+		option!(__optimise__short(), __optimise__long());
+		roff.text([
+			roman("Specifies the "),
+			bold("optimisation level"),
+			roman(" for compilation."),
+			line_break(),
+			roman("Omitting "),
+			italic("level"),
+			roman(" is equivalent to specifying "),
+			bold("-O3"),
+			roman("."),
+		]);
+		roff.control("RE", []);
+	};
+	{
+		option!(__no_optimise__long());
+		roff.text([
+			roman("Sets the "),
+			bold("optimisation level"),
+			roman(" to zero (disables optimisations)."),
+			line_break(),
+			roman("This is equivalent to specifying "),
+			bold("-O0"),
+			roman("."),
+		]);
+		roff.control("RE", []);
+	};
+	{
+		option!(__help__short(), __help__long());
+		roff.text([roman("Opens this man page.")]);
+		roff.control("RE", []);
+	};
+	{
+		option!(__version__short(), __version__long());
+		roff.text([roman("Prints version information, then terminates.")]);
 		roff.control("RE", []);
 	};
 }
