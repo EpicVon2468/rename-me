@@ -3,21 +3,25 @@
 
 use std::{
 	collections::VecDeque,
-	env::var as env,
+	env::{var, var_os},
+	ffi::OsString,
 	fs::File,
 	process::{Command, Output, Stdio},
 };
 
 use roff::{Inline, Roff, bold, italic, line_break, roman};
 
-use shell_words::{ParseError, split as parse};
+use shell_words::{ParseError, split};
 
 const PROGRAM: &'static str = "renamec";
 
 fn compile_cxx() {
-	let llvm_config: String = match env("LLVM_SYS_221_PREFIX") {
-		Ok(prefix) => format!("{prefix}/bin/llvm-config"),
-		Err(_) => String::from("llvm-config"),
+	let llvm_config: OsString = match var_os("LLVM_PREFIX") {
+		Some(mut prefix) => {
+			prefix.push("/bin/llvm-config");
+			prefix
+		},
+		None => OsString::from("llvm-config"),
 	};
 	let output: Output = Command::new(llvm_config)
 		.arg("--cxxflags")
@@ -30,7 +34,7 @@ fn compile_cxx() {
 		.expect("`llvm-config` returned non-zero!");
 	let stdout: &str = str::from_utf8(&output.stdout)
 		.expect("Failed to convert `llvm-config`'s stdout into UTF-8!");
-	let Ok(flags): Result<Vec<String>, ParseError> = parse(stdout) else {
+	let Ok(flags): Result<Vec<String>, ParseError> = split(stdout) else {
 		unreachable!("Infeasible.");
 	};
 	cc::Build::new()
@@ -45,6 +49,8 @@ fn compile_cxx() {
 }
 
 pub fn main() {
+	println!("cargo::rerun-if-env-changed=LLVM_PREFIX");
+	println!("cargo::rerun-if-changed=src/rename-me.c++");
 	compile_cxx();
 	let mut page: Roff = Roff::new();
 	page.control(
@@ -64,9 +70,9 @@ pub fn main() {
 	see_also_section(&mut page);
 	{
 		let out_dir: String = {
-			let target_dir: String = env("CARGO_TARGET_DIR")
-				.unwrap_or_else(|_| format!("{}/target", env("CARGO_MANIFEST_DIR").unwrap()));
-			format!("{target_dir}/{}", env("PROFILE").unwrap())
+			let target_dir: String = var("CARGO_TARGET_DIR")
+				.unwrap_or_else(|_| format!("{}/target", var("CARGO_MANIFEST_DIR").unwrap()));
+			format!("{target_dir}/{}", var("PROFILE").unwrap())
 		};
 		let file: String = format!("{out_dir}/{PROGRAM}.1");
 		let mut out: File = File::options()

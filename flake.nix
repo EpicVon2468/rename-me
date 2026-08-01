@@ -30,7 +30,7 @@
 					LIB_LLVM = llvmPkgs.llvm.lib.outPath;
 					DEV_LLVM = llvmPkgs.llvm.dev.outPath;
 					LD_LIBRARY_PATH = "${llvmPkgs.llvm.lib.outPath}/lib";
-					LLVM_SYS_221_PREFIX = llvmPkgs.llvm.dev.outPath;
+					LLVM_PREFIX = llvmPkgs.llvm.dev.outPath;
 				};
 			}
 		);

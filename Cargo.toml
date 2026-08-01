@@ -14,6 +14,14 @@ exclude = [
 	".github/",
 ]
 
+[features]
+llvm-shared = [
+	"inkwell/llvm22-1-force-dynamic",
+]
+llvm-static = [
+	"inkwell/llvm22-1-force-static",
+]
+
 [[bin]]
 name = "renamec"
 path = "src/main.rs"
@@ -36,7 +44,7 @@ version = ">=1.0.104, <2"
 [dependencies.inkwell]
 version = ">=0.9.0, <1"
 features = [
-	"llvm22-1-force-dynamic",
+	"llvm22-1",
 	"nightly",
 	"target-x86",
 	"target-aarch64",
@@ -68,6 +76,9 @@ version = ">=1.1.1, <2"
 [patch.crates-io]
 inkwell = {
 	git = "https://github.com/EpicVon2468/inkwell",
+}
+llvm-sys = {
+	path = "vendored/llvm-sys",
 }
 
 # The profile that 'dist' will build with
