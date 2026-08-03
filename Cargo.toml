@@ -44,6 +44,8 @@ version = ">=1.0.104, <2"
 [dependencies.inkwell]
 version = ">=0.9.0, <1"
 features = [
+	# Inkwell would just duplicate the linking.
+	"no-libffi-linking",
 	"llvm22-1",
 	"nightly",
 	"target-x86",
@@ -63,6 +65,9 @@ features = [
 	"constructor",
 	"display",
 ]
+
+[dependencies.shell-words]
+version = ">=1.1.1, <2"
 
 [build-dependencies.roff]
 version = ">=1.1.1, <2"

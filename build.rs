@@ -111,8 +111,8 @@ fn name_section(roff: &mut Roff) {
 }
 
 // jobs
-fn __jobs__short() -> [Inline; 3] {
-	[bold("-j"), roman(" "), italic("n")]
+fn __jobs__short() -> [Inline; 4] {
+	[bold("-j"), roman(" ["), italic("n"), roman("]")]
 }
 fn __jobs__long() -> [Inline; 3] {
 	[bold("--jobs"), roman("="), italic("n")]
@@ -145,6 +145,20 @@ fn __verbose__long() -> [Inline; 1] {
 // rpath
 fn __rpath__long() -> [Inline; 3] {
 	[bold("--rpath"), roman("="), italic("value")]
+}
+
+// library linking
+fn __link__short() -> [Inline; 3] {
+	[bold("-l"), roman(" "), italic("name")]
+}
+fn __link__long() -> [Inline; 3] {
+	[bold("--link"), roman("="), italic("name")]
+}
+fn __libpath__short() -> [Inline; 3] {
+	[bold("-L"), roman(" "), italic("dir")]
+}
+fn __libpath__long() -> [Inline; 3] {
+	[bold("--libpath"), roman("="), italic("dir")]
 }
 
 // pass runner
@@ -328,6 +342,14 @@ fn synopsis_section(roff: &mut Roff) {
 	));
 
 	roff.text(option!(__rpath__long(), newline = true));
+
+	roff.text(option!(
+		option!(option!(__link__short()), __link__long(), mode = OR),
+		option!(option!(__libpath__short()), __libpath__long(), mode = OR),
+		mode = AND,
+		newline = true,
+		wrap = false,
+	));
 
 	roff.text(option!(__pass_runner__long(), newline = true));
 
@@ -536,6 +558,31 @@ fn options_section(roff: &mut Roff) {
 		roff.control("RE", []);
 	};
 	{
+		option!(__link__short(), __link__long());
+		roff.text([
+			roman("Specifies that "),
+			bold("lib"),
+			italic("name"),
+			roman(".{"),
+			bold("so"),
+			roman("|"),
+			bold("a"),
+			roman("} should be linked against for compilation."),
+		]);
+		roff.control("RE", []);
+	};
+	{
+		option!(__libpath__short(), __libpath__long());
+		roff.text([
+			roman("Specifies a directory to look for libraries in.  "),
+			bold("renamec"),
+			roman(" will use these directories to look for libraries specified by the "),
+			bold("-l"),
+			roman(" option."),
+		]);
+		roff.control("RE", []);
+	};
+	{
 		option!(__pass_runner__long());
 		roff.text([
 			roman("Specifies how LLVM optimisation & analysis passes should be ran."),
@@ -623,7 +670,7 @@ fn options_section(roff: &mut Roff) {
 
 fn environment_section(roff: &mut Roff) {
 	roff.control("SH", ["ENVIRONMENT"]);
-	simple_env_var(roff, "CFLAGS", "args", true);
+	simple_env_var(roff, "LDFLAGS", "args", true);
 	simple_env_var(roff, "LLVM_PASSES", "--passes", false);
 	command_env_var(
 		roff,

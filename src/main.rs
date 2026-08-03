@@ -71,7 +71,7 @@
 pub mod cli;
 pub mod codegen;
 pub mod errors;
-mod ffi;
+pub mod ffi;
 pub mod lexer;
 pub mod macros;
 pub mod parser;
@@ -80,9 +80,10 @@ pub mod tests;
 pub mod types;
 
 use std::{
-	env::{Args, args, var_os as get_var},
+	env::{Args, args, var as get_var, var_os as get_var_raw},
 	error::Error,
 	iter::Take,
+	path::PathBuf,
 	process::ExitCode,
 	str::Chars,
 };
@@ -101,6 +102,8 @@ use inkwell::{
 	},
 };
 
+use shell_words::split;
+
 use crate::{
 	cli::{EmitKind, UserConfig},
 	codegen::CodeGen,
@@ -109,16 +112,35 @@ use crate::{
 	parser::{Parser, TopLevel, function::FunctionDeclaration},
 };
 
+macro_rules! parse {
+	($arg_name:expr, $value:expr $(,)?) => {
+		parse!($arg_name, $value, None)
+	};
+	($arg_name:expr, $value:expr, $expected:expr $(,)?) => {{
+		let value = $value;
+		match value.parse() {
+			Ok(value) => value,
+			Err(_) => bail!(CLIError::InvalidValue {
+				arg_name: $arg_name,
+				value: value.to_owned(),
+				expected: $expected,
+			}),
+		}
+	}};
+}
+
 pub fn main() {
 	let exit_code: ExitCode = match main_impl() {
 		Ok(exit_code) => exit_code,
 		Err(error) => {
 			eprintln!("{error}");
-			eprintln!("Caused by:");
-			error
-				.chain()
-				.skip(1)
-				.for_each(|cause: &(dyn Error + 'static)| eprintln!("\t{}", cause));
+			let chain: Vec<&(dyn Error + 'static)> = error.chain().skip(1).collect();
+			if !chain.is_empty() {
+				eprintln!("Caused by:");
+				for error in chain {
+					eprintln!("\t{error}");
+				}
+			};
 			ExitCode::FAILURE
 		},
 	};
@@ -135,10 +157,47 @@ fn main_impl() -> Result<ExitCode> {
 	// skip executable
 	let _ = args.next();
 	while let Some(arg) = next(&mut args, &mut cached) {
+		if let "--" = &arg[..] {
+			// Parse everything after the '-- ' as a separate set of flags.
+			while let Some(next) = next(&mut args, &mut cached) {
+				config.trailing.push(next);
+			}
+			// Nothing further to parse.
+			break;
+		};
+		debug_assert!(!arg.is_empty());
 		let mut chars: Chars = arg.chars();
 		let mut prefix: Take<&mut Chars> = chars.by_ref().take(2);
+		macro_rules! short_arg_req_val {
+			($arg_name:expr $(,)?) => {
+				short_arg_req_val!($arg_name, None)
+			};
+			($arg_name:expr, $expected:expr $(,)?) => {{
+				let mut value: String = chars.as_str().to_owned();
+				let mut is_error: bool = false;
+				if value.is_empty() {
+					is_error = true;
+					if let Some(next) = next(&mut args, &mut cached) {
+						if next.chars().next() == Some('-') {
+							cached.push(next);
+						} else {
+							value = next;
+							is_error = false;
+						};
+					};
+				};
+				if is_error {
+					bail!(CLIError::InvalidValue {
+						arg_name: $arg_name,
+						value,
+						expected: $expected,
+					});
+				};
+				value
+			}};
+		}
 		macro_rules! short_num_arg {
-			($field:ident, $default:expr $(,)?) => {{
+			($field:ident, $arg_name:expr, $default:expr $(,)?) => {{
 				let mut value: String = chars.as_str().to_owned();
 				if value.is_empty() {
 					if let Some(next) = next(&mut args, &mut cached) {
@@ -154,19 +213,32 @@ fn main_impl() -> Result<ExitCode> {
 						value.push($default);
 					};
 				};
-				// TODO: better error handling here.
-				config.$field = value.parse()?;
+				config.$field = parse!($arg_name, value, Some("a positive integer"));
 			}};
 		}
 		match (prefix.next().unwrap(), prefix.next().unwrap()) {
-			('-', 'j') => {
-				short_num_arg!(jobs, '2');
+			('-', 'j') => short_num_arg!(jobs, "-j", '2'),
+			('-', 'v') => config.verbose = true,
+			('-', 'l') => {
+				config
+					.link_libraries
+					.push(short_arg_req_val!("-l", Some("a valid library name")));
 			},
-			('-', 'v') => {
-				config.verbose = true;
+			('-', 'O') => short_num_arg!(optimise, "-O", '3'),
+			('-', 'e') => {
+				config.emit_kind = emit_arg(
+					"-e",
+					&short_arg_req_val!(
+						"-e",
+						Some("one of: 'elf-linked' OR 'elf-obj' OR 'asm' OR 'llvm-ir'"),
+					),
+				)?;
 			},
-			('-', 'O') => {
-				short_num_arg!(optimise, '3');
+			('-', 'o') => {
+				config.output_file = Some(PathBuf::from(short_arg_req_val!(
+					"-o",
+					Some("a valid file path"),
+				)));
 			},
 			('-', 'V') => {
 				println!(env!("CARGO_PKG_VERSION"));
@@ -192,76 +264,37 @@ fn main_impl() -> Result<ExitCode> {
 				};
 				// parse long-form args (always has `=` sign)
 				match arg.split_once('=') {
-					Some(("reloc", value)) => match value {
-						"default" => {
-							config.reloc = RelocMode::Default;
-						},
-						"static" => {
-							config.reloc = RelocMode::Static;
-						},
-						"pic" => {
-							config.reloc = RelocMode::PIC;
-						},
-						"dynamic-no-pic" => {
-							config.reloc = RelocMode::DynamicNoPic;
-						},
-						invalid => bail!(CLIError::InvalidValue {
-							arg_name: "--reloc",
-							value: invalid.to_owned(),
-							expected: Some(
-								"one of: 'default' OR 'static' OR 'pic' OR 'dynamic-no-pic'",
-							),
-						}),
+					Some(("jobs", value)) => config.jobs = parse!("--jobs", value),
+					Some(("reloc", value)) => {
+						config.reloc = match value {
+							"default" => RelocMode::Default,
+							"static" => RelocMode::Static,
+							"pic" => RelocMode::PIC,
+							"dynamic-no-pic" => RelocMode::DynamicNoPic,
+							invalid => bail!(CLIError::InvalidValue {
+								arg_name: "--reloc",
+								value: invalid.to_owned(),
+								expected: Some(
+									"one of: 'default' OR 'static' OR 'pic' OR 'dynamic-no-pic'",
+								),
+							}),
+						};
 					},
-					Some(("target", value)) => {
-						// Validation handled later.
-						config.target = TargetTuple::create(value);
-					},
-					Some(("optimise", value)) => {
-						config.optimise =
-							value.parse().expect("Failed to parse optimisation level!");
-					},
-					Some(("emit", value)) => match value {
-						"elf-linked" => {
-							config.emit_kind = EmitKind::ElfLinked;
-						},
-						"elf-obj" => {
-							config.emit_kind = EmitKind::ElfObject;
-						},
-						"asm" => {
-							config.emit_kind = EmitKind::Assembly;
-						},
-						"llvm-ir" => {
-							config.emit_kind = EmitKind::IntermediateRepresentation;
-						},
-						invalid => bail!(CLIError::InvalidValue {
-							arg_name: "--emit",
-							value: invalid.to_owned(),
-							expected: Some(
-								"one of: 'elf-linked' OR 'elf-obj' OR 'asm' OR 'llvm-ir'",
-							),
-						}),
-					},
+					Some(("target", value)) => config.target = TargetTuple::create(value),
+					Some(("link", value)) => config.link_libraries.push(value.to_owned()),
+					Some(("optimise", value)) => config.optimise = parse!("--optimise", value),
+					Some(("emit", value)) => config.emit_kind = emit_arg("--emit", value)?,
+					Some(("output-file", value)) => config.output_file = Some(PathBuf::from(value)),
 					None => {
 						// no '=', therefore a flag
 						match arg {
-							"native-target" => {
-								config.target = TargetMachine::get_default_triple();
-							},
-							"verbose" => {
-								config.verbose = true;
-							},
-							"dump-passes" => {
-								// Can't run here immediately & return, as LLVM targets need to be initialised first.
-								config.dump_passes = true;
-							},
-							"optimise" => {
-								// `--optimise` is equivalent to `--optimise=3`
-								config.optimise = 3;
-							},
-							"no-optimise" => {
-								config.optimise = 0;
-							},
+							"native-target" => config.target = TargetMachine::get_default_triple(),
+							"verbose" => config.verbose = true,
+							// Can't run here immediately & return, as LLVM targets need to be initialised first.
+							"dump-passes" => config.dump_passes = true,
+							// `--optimise` is equivalent to `--optimise=3`
+							"optimise" => config.optimise = 3,
+							"no-optimise" => config.optimise = 0,
 							"version" => {
 								println!(concat!("renamec v", env!("CARGO_PKG_VERSION")));
 								return Ok(ExitCode::SUCCESS);
@@ -279,15 +312,20 @@ fn main_impl() -> Result<ExitCode> {
 			_ => bail!(CLIError::UnknownArgument { arg_name: arg }),
 		}
 	}
-	if let Some(value) = get_var("LD") {
+	if let Ok(value) = get_var("LDFLAGS") {
+		config
+			.trailing
+			.extend_from_slice(&split(&value).context("Failed to parse $LDFLAGS")?);
+	};
+	if let Some(value) = get_var_raw("LD") {
 		config.linker_command = value;
-	} else if let Some(value) = get_var("LINKER") {
+	} else if let Some(value) = get_var_raw("LINKER") {
 		config.linker_command = value;
 	};
-	if let Some(value) = get_var("STRIP") {
+	if let Some(value) = get_var_raw("STRIP") {
 		config.strip_command = value;
 	};
-	if let Some(value) = get_var("OPT") {
+	if let Some(value) = get_var_raw("OPT") {
 		config.opt_command = value;
 	};
 	dbg!(&config);
@@ -297,6 +335,20 @@ fn main_impl() -> Result<ExitCode> {
 	Ok(ExitCode::SUCCESS)
 }
 
+fn emit_arg(arg_name: &'static str, value: &str) -> Result<EmitKind> {
+	Ok(match value {
+		"elf-linked" => EmitKind::ElfLinked,
+		"elf-obj" => EmitKind::ElfObject,
+		"asm" => EmitKind::Assembly,
+		"llvm-ir" => EmitKind::IntermediateRepresentation,
+		invalid => bail!(CLIError::InvalidValue {
+			arg_name,
+			value: invalid.to_owned(),
+			expected: Some("one of: 'elf-linked' OR 'elf-obj' OR 'asm' OR 'llvm-ir'"),
+		}),
+	})
+}
+
 fn initialise_targets(config: &UserConfig) -> Result<Option<ExitCode>> {
 	let init_config: InitialisationConfig = InitialisationConfig::default();
 	Target::initialize_x86(&init_config);
@@ -304,13 +356,6 @@ fn initialise_targets(config: &UserConfig) -> Result<Option<ExitCode>> {
 	Target::initialize_power_pc(&init_config);
 	Target::initialize_riscv(&init_config);
 	Target::initialize_loongarch(&init_config);
-	if let Err(error) = Target::from_triple(&config.target) {
-		return Err(error).context(CLIError::InvalidValue {
-			arg_name: "--target",
-			value: config.target.as_str().to_string_lossy().into_owned(),
-			expected: Some("a valid target tuple"),
-		});
-	};
 	if config.dump_passes {
 		// Prevent soundness violation if we're on a target not officially supported.
 		// SANITY(unusual): The error type of this function is String, which cannot be used in `?` sugar.
@@ -323,19 +368,27 @@ fn initialise_targets(config: &UserConfig) -> Result<Option<ExitCode>> {
 		};
 		return Ok(Some(ExitCode::SUCCESS));
 	};
-	let target_arch: Target =
-		Target::from_triple(&config.target).context("Invalid target tuple!")?;
+	let target_arch: Target = match Target::from_triple(&config.target) {
+		Ok(value) => value,
+		Err(error) =>
+			return Err(error).context(CLIError::InvalidValue {
+				arg_name: "--target",
+				value: config.target.as_str().to_string_lossy().into_owned(),
+				expected: Some("a valid target tuple"),
+			}),
+	};
 	dbg!(target_arch.get_name());
 	// This is a rather wasteful conversion, as the &str is immediately turned back into &CStr by inkwell.
 	// However, the `inner()` function of `TargetMachineOptions` appears to be private, meaning that
 	// using the raw LLVM-C API isn't possible.
 	// TODO: Is now a good time to start vendoring inkwell?
-	let target_options: TargetMachineOptions =
-		TargetMachineOptions::default().set_cpu(&target_arch.get_name().to_string_lossy());
+	let _target_options: TargetMachineOptions = TargetMachineOptions::default()
+		.set_cpu(&target_arch.get_name().to_string_lossy())
+		.set_reloc_mode(config.reloc);
 	Ok(None)
 }
 
-pub fn _test() -> Result<()> {
+fn _test() -> Result<()> {
 	let config: InitialisationConfig = InitialisationConfig::default();
 	Target::initialize_x86(&config);
 	Target::initialize_aarch64(&config);

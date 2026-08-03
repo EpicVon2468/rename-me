@@ -95,7 +95,9 @@ pub fn main() {
 	// Link system libraries
 	// We get the system libraries based on the kind of LLVM libraries we link to, but we link to
 	// system libs based on the target environment.
-	for name in llvm_config(&["--system-libs"]) {
+	let mut system_libs: Vec<String> = llvm_config(&["--system-libs"]);
+	system_libs.push("-lffi".to_owned());
+	for name in system_libs {
 		println!(
 			concat!(
 				"cargo::rustc-link-lib=",
@@ -109,5 +111,4 @@ pub fn main() {
 			&name[2..],
 		);
 	}
-	println!("cargo::rustc-link-lib=dylib=ffi");
 }
